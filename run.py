@@ -49,6 +49,10 @@ COLOR = "auto"
 # tree, so off by default (the full list is still in the JSON output).
 SHOW_REMOTE_ONLY = False
 
+# Also detect RENAMED duplicates: unmatched local files that are byte-for-byte
+# copies of a remote file under a different name (matched by size then content).
+MATCH_RENAMED = False
+
 # Print the exact read-only remote commands and exit WITHOUT connecting.
 # Set True for a dry-run audit of what would run remotely.
 SHOW_PLAN = False
@@ -77,6 +81,8 @@ def build_argv():
     argv += ["--color", COLOR]
     if SHOW_REMOTE_ONLY:
         argv += ["--show-remote-only"]
+    if MATCH_RENAMED:
+        argv += ["--match-renamed"]
     if SHOW_PLAN:
         argv += ["--show-plan"]
     if QUIET:

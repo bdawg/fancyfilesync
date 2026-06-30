@@ -19,9 +19,15 @@ Two hard design constraints drive the whole architecture:
 
 from .core import (
     DuplicateGroup,
+    RenamedGroup,
     ScanResult,
     find_duplicates,
 )
 
-__all__ = ["DuplicateGroup", "ScanResult", "find_duplicates"]
+__all__ = [
+    "DuplicateGroup",
+    "RenamedGroup",
+    "ScanResult",
+    "find_duplicates",
+]
 __version__ = "0.1.0"

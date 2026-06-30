@@ -164,15 +164,17 @@ def _render_tree(tree: TreeNode, palette: Palette, prefix: str = "") -> List[str
     return lines
 
 
-def render_duplicate_tree(result: ScanResult, palette: Palette) -> List[str]:
-    """Render the duplicated local files as a per-root tree."""
-    if not result.duplicate_groups:
-        return ["  " + palette.dim("(no duplicates found)")]
+def _render_groups_as_tree(
+    groups, local_roots: List[str], palette: Palette, empty_message: str
+) -> List[str]:
+    """Render any list of groups (with ``.local_paths``/``.remote_paths``/
+    ``.size``) as a per-root tree of local files annotated with remote paths."""
+    if not groups:
+        return ["  " + palette.dim(empty_message)]
 
-    roots = _abspath_roots(result.local_roots)
-    # Bucket every duplicated local file under the root it belongs to.
+    roots = _abspath_roots(local_roots)
     by_root: Dict[str, list] = {}
-    for group in result.duplicate_groups:
+    for group in groups:
         for path in group.local_paths:
             root = _root_for(path, roots)
             rel = os.path.relpath(path, root) if root else path
@@ -189,6 +191,16 @@ def render_duplicate_tree(result: ScanResult, palette: Palette) -> List[str]:
     if lines and lines[-1] == "":
         lines.pop()
     return lines
+
+
+def render_duplicate_tree(result: ScanResult, palette: Palette) -> List[str]:
+    """Render the duplicated local files as a per-root tree."""
+    return _render_groups_as_tree(
+        result.duplicate_groups,
+        result.local_roots,
+        palette,
+        "(no duplicates found)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +235,11 @@ def render_text(
     dup_bytes = sum(g.size * len(g.local_paths) for g in result.duplicate_groups)
     local_only_bytes = sum(result.local_files.get(p_, 0) for p_ in result.local_only)
 
+    renamed_file_count = sum(len(g.local_paths) for g in result.renamed_groups)
+    renamed_bytes = sum(
+        g.size * len(g.local_paths) for g in result.renamed_groups
+    )
+
     add(p.bold("=" * 70))
     add(p.bold("  DUPLICATE FILE REPORT"))
     add(p.bold("=" * 70))
@@ -246,6 +263,18 @@ def render_text(
     else:
         headline = p.yellow(p.bold("No duplicated files found on the remote"))
     add("  " + headline)
+    if renamed_file_count:
+        add(
+            "  "
+            + p.cyan(
+                p.bold(
+                    f"↺ {renamed_file_count} renamed duplicate"
+                    f"{'s' if renamed_file_count != 1 else ''} "
+                    f"(same content, different name)"
+                )
+            )
+            + p.dim(f"  ({human_size(renamed_bytes)})")
+        )
     add("")
 
     add("  SUMMARY")
@@ -270,6 +299,14 @@ def render_text(
         )
     )
     add(f"  Distinct duplicate groups  : {len(result.duplicate_groups):>8}")
+    if result.renamed_checked:
+        add(
+            "  "
+            + p.cyan(
+                f"Renamed duplicates         : {renamed_file_count:>8}  "
+                f"({human_size(renamed_bytes)})"
+            )
+        )
     add(
         "  "
         + p.yellow(
@@ -285,6 +322,24 @@ def render_text(
     add("  " + "-" * 66)
     lines.extend(render_duplicate_tree(result, p))
     add("")
+
+    # -- renamed duplicates (shown whenever the rename pass ran) -------------
+    if result.renamed_checked:
+        add(
+            p.bold("  RENAMED DUPLICATES")
+            + p.dim("  (identical content, different filename)")
+        )
+        add("  " + "-" * 66)
+        lines.extend(
+            _render_groups_as_tree(
+                result.renamed_groups,
+                result.local_roots,
+                p,
+                "checked, none found — no unmatched local file has a "
+                "same-content copy on the remote",
+            )
+        )
+        add("")
 
     # -- supporting flat lists ---------------------------------------------
     add(p.bold("  LOCAL FILES WITH NO REMOTE DUPLICATE"))
@@ -349,6 +404,10 @@ def render_json(result: ScanResult) -> str:
             "duplicated_local_files": sum(
                 len(g.local_paths) for g in result.duplicate_groups
             ),
+            "renamed_groups": len(result.renamed_groups),
+            "renamed_local_files": sum(
+                len(g.local_paths) for g in result.renamed_groups
+            ),
             "local_only": len(result.local_only),
             "remote_only": len(result.remote_only),
         },
@@ -361,6 +420,15 @@ def render_json(result: ScanResult) -> str:
                 "remote_paths": g.remote_paths,
             }
             for g in result.duplicate_groups
+        ],
+        "renamed_groups": [
+            {
+                "digest": g.digest,
+                "size": g.size,
+                "local_paths": g.local_paths,
+                "remote_paths": g.remote_paths,
+            }
+            for g in result.renamed_groups
         ],
         "local_only": [
             {"path": p, "size": result.local_files[p]} for p in result.local_only

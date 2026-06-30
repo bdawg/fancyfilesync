@@ -103,6 +103,48 @@ def test_same_content_different_name_is_not_matched(tmp_path):
     assert result.remote_only == ["/remote/right.bin"]
 
 
+def test_match_renamed_finds_renamed_copy(tmp_path):
+    local_dir = tmp_path / "local"
+    renamed = b"the same bytes under a new name" * 100
+    truly_unique = b"nothing matches this one"
+    _write(str(local_dir / "report_final.pdf"), renamed)
+    _write(str(local_dir / "orphan.dat"), truly_unique)
+
+    remote = FakeRemote(
+        {
+            # Same content as report_final.pdf but a different name.
+            "/remote/archive/report_v3.pdf": renamed,
+            "/remote/archive/unrelated.bin": b"x" * 12345,
+        }
+    )
+
+    # Without the flag: no match (names differ), both sides reported as orphans.
+    plain = find_duplicates([str(local_dir)], remote, ["/remote"])
+    assert plain.duplicate_groups == []
+    assert plain.renamed_groups == []
+    assert str(local_dir / "report_final.pdf") in plain.local_only
+
+    # With the flag: the renamed copy is found and removed from local_only.
+    renamed_remote = FakeRemote(
+        {
+            "/remote/archive/report_v3.pdf": renamed,
+            "/remote/archive/unrelated.bin": b"x" * 12345,
+        }
+    )
+    result = find_duplicates(
+        [str(local_dir)], renamed_remote, ["/remote"], match_renamed=True
+    )
+    assert result.duplicate_groups == []
+    assert len(result.renamed_groups) == 1
+    group = result.renamed_groups[0]
+    assert group.local_paths == [str(local_dir / "report_final.pdf")]
+    assert group.remote_paths == ["/remote/archive/report_v3.pdf"]
+    # The matched local file is no longer counted as local-only.
+    assert str(local_dir / "report_final.pdf") not in result.local_only
+    # The genuinely unique local file stays local-only.
+    assert str(local_dir / "orphan.dat") in result.local_only
+
+
 def test_unique_names_are_never_hashed(tmp_path):
     local_dir = tmp_path / "local"
     _write(str(local_dir / "x"), b"short")

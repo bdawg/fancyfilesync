@@ -54,6 +54,20 @@ class DuplicateGroup:
 
 
 @dataclass
+class RenamedGroup:
+    """Files with identical content but *different* filenames.
+
+    These are only discovered when ``match_renamed`` is enabled, since by
+    default a differing filename rules a match out entirely.
+    """
+
+    digest: str
+    size: int
+    local_paths: List[str]
+    remote_paths: List[str]
+
+
+@dataclass
 class ScanResult:
     """The full outcome of a duplicate scan."""
 
@@ -66,13 +80,20 @@ class ScanResult:
     local_files: Dict[str, int]
     remote_files: Dict[str, int]
 
-    # Files proven identical across the two machines.
+    # Files proven identical across the two machines (same name and content).
     duplicate_groups: List[DuplicateGroup]
 
     # Local files with no identical copy on the remote.
     local_only: List[str]
     # Remote files with no identical copy locally.
     remote_only: List[str]
+
+    # Renamed duplicates: identical content under a different filename. Only
+    # populated when match_renamed is enabled.
+    renamed_groups: List[RenamedGroup] = field(default_factory=list)
+    # Whether the rename-detection pass actually ran (so the report can say
+    # "checked, none found" rather than staying silent).
+    renamed_checked: bool = False
 
     # How many files actually had to be hashed on each side, for transparency.
     local_files_hashed: int = 0
@@ -87,9 +108,16 @@ def find_duplicates(
     remote: RemoteExecutor,
     remote_dirs: Sequence[str],
     algorithm: str = "sha256",
+    match_renamed: bool = False,
     progress=None,
 ) -> ScanResult:
     """Run the full pipeline and return a :class:`ScanResult`.
+
+    When ``match_renamed`` is True, a second pass takes the local files that the
+    name-based pass left unmatched and looks for content matches among remote
+    files of the *same size, regardless of name*. This catches renamed copies.
+    The extra hashing is scoped to those leftover files only, so the remote
+    workload stays small.
 
     ``progress`` is an optional callable taking a single status string; pass a
     printer to get live feedback during long scans.
@@ -170,6 +198,20 @@ def find_duplicates(
 
     duplicate_groups.sort(key=lambda g: g.size, reverse=True)
 
+    renamed_groups: List[RenamedGroup] = []
+    if match_renamed:
+        renamed_groups = _find_renamed(
+            local_files=local_files,
+            remote_files=remote_files,
+            matched_local=matched_local,
+            matched_remote=matched_remote,
+            local_hashes=local_hashes,
+            remote_hashes=remote_hashes,
+            remote=remote,
+            algorithm=algorithm,
+            report=report,
+        )
+
     local_only = sorted(p for p in local_files if p not in matched_local)
     remote_only = sorted(p for p in remote_files if p not in matched_remote)
 
@@ -183,7 +225,83 @@ def find_duplicates(
         duplicate_groups=duplicate_groups,
         local_only=local_only,
         remote_only=remote_only,
+        renamed_groups=renamed_groups,
+        renamed_checked=match_renamed,
         local_files_hashed=len(local_hashes),
         remote_files_hashed=len(remote_hashes),
         remote_commands=list(remote.executed_commands),
     )
+
+
+def _find_renamed(
+    local_files: Dict[str, int],
+    remote_files: Dict[str, int],
+    matched_local: set,
+    matched_remote: set,
+    local_hashes: Dict[str, str],
+    remote_hashes: Dict[str, str],
+    remote: RemoteExecutor,
+    algorithm: str,
+    report,
+) -> List[RenamedGroup]:
+    """Second pass: match leftover local files to remote files by content only.
+
+    Mutates ``matched_local`` / ``matched_remote`` / the hash caches so the
+    caller's downstream stats and local_only/remote_only lists stay correct.
+    """
+    remaining_local = [p for p in local_files if p not in matched_local]
+    if not remaining_local:
+        return []
+
+    # The only remote files worth considering are those whose size matches some
+    # leftover local file -- a same-size requirement keeps the extra remote
+    # hashing minimal even on a huge remote tree.
+    wanted_sizes = {local_files[p] for p in remaining_local}
+    remote_candidates = [
+        path for path, size in remote_files.items() if size in wanted_sizes
+    ]
+    report(
+        f"Rename pass: {len(remaining_local)} unmatched local files; "
+        f"{len(remote_candidates)} remote files share a size and will be hashed"
+    )
+
+    # Hash whatever isn't already hashed from the first pass (reuse the rest).
+    local_to_hash = [p for p in remaining_local if p not in local_hashes]
+    if local_to_hash:
+        report("Hashing leftover local files...")
+        local_hashes.update(local_mod.hash_local_files(local_to_hash, algorithm))
+    remote_to_hash = [p for p in remote_candidates if p not in remote_hashes]
+    if remote_to_hash:
+        report("Hashing extra remote candidates (on the remote machine)...")
+        remote_hashes.update(remote.hash_files(remote_to_hash, algorithm))
+
+    # Group by content alone (name ignored).
+    local_by_digest: Dict[str, List[str]] = defaultdict(list)
+    for path in remaining_local:
+        digest = local_hashes.get(path)
+        if digest is not None:
+            local_by_digest[digest].append(path)
+    remote_by_digest: Dict[str, List[str]] = defaultdict(list)
+    for path in remote_candidates:
+        digest = remote_hashes.get(path)
+        if digest is not None:
+            remote_by_digest[digest].append(path)
+
+    renamed_groups: List[RenamedGroup] = []
+    for digest in set(local_by_digest) & set(remote_by_digest):
+        local_paths = sorted(local_by_digest[digest])
+        remote_paths = sorted(remote_by_digest[digest])
+        size = local_files[local_paths[0]]
+        renamed_groups.append(
+            RenamedGroup(
+                digest=digest,
+                size=size,
+                local_paths=local_paths,
+                remote_paths=remote_paths,
+            )
+        )
+        matched_local.update(local_paths)
+        matched_remote.update(remote_paths)
+
+    renamed_groups.sort(key=lambda g: g.size, reverse=True)
+    return renamed_groups

@@ -42,6 +42,16 @@ paths). That assumption lets the tool rule out almost everything for free:
 
 This keeps both network transfer and remote disk I/O to the minimum needed.
 
+### Catching renamed copies (`--match-renamed`)
+
+The same-filename assumption is what makes the scan cheap, but it misses files
+that were renamed on the remote. With `--match-renamed`, a second pass takes
+only the local files the first pass left unmatched and looks for a remote file
+of the **same size and same content, regardless of name**. Because it is scoped
+to those leftover files (and reuses hashes already computed), the extra remote
+work stays small even on a huge remote tree. Renamed matches are reported in
+their own section so they're never confused with exact-name duplicates.
+
 ## Requirements
 
 - Python 3.8+ (standard library only; no third-party packages to run it).
@@ -73,6 +83,8 @@ Key options:
 | `--json FILE` | Also write the complete result as JSON. |
 | `--max-examples N` | Cap entries shown per section in the text report. |
 | `--color {auto,always,never}` | Colourise the report (`auto` = colour only on a terminal). |
+| `--match-renamed` | Also detect renamed copies: check whether unmatched local files are byte-identical to a remote file under a *different* name. |
+| `--show-remote-only` | List every unmatched remote file (off by default; huge on big trees). |
 | `--show-plan` | Print the exact read-only remote commands and exit **without connecting**. |
 | `--quiet` | Suppress progress output. |
 
