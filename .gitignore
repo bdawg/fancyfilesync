@@ -10,4 +10,5 @@ venv/
 
 # Tool output
 result.json
+report.md
 *.json.tmp

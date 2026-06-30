@@ -21,6 +21,19 @@ def human_size(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
+def human_time(seconds: float) -> str:
+    """Format a duration in seconds as a short human-readable string."""
+    if seconds < 1:
+        return f"{seconds * 1000:.0f} ms"
+    if seconds < 60:
+        return f"{seconds:.1f} s"
+    minutes, secs = divmod(int(round(seconds)), 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m {secs:02d}s"
+
+
 # ---------------------------------------------------------------------------
 # Colour
 # ---------------------------------------------------------------------------
@@ -294,6 +307,15 @@ def render_text(
         f" / {result.remote_files_hashed}"
     )
     add(
+        f"  Time hashing local         : {human_time(result.local_hash_seconds):>8}"
+    )
+    add(
+        f"  Time hashing remote        : {human_time(result.remote_hash_seconds):>8}"
+    )
+    add(
+        f"  Total run time             : {human_time(result.total_seconds):>8}"
+    )
+    add(
         "  "
         + p.green(
             f"Duplicated local files     : {dup_file_count:>8}  "
@@ -388,6 +410,167 @@ def render_text(
     return "\n".join(lines)
 
 
+def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
+    """Render the report as a formatted Markdown document.
+
+    The duplicate trees are placed in fenced code blocks so the box-drawing
+    characters line up in any Markdown viewer. ``show_remote_only`` behaves as
+    in :func:`render_text`.
+    """
+    plain = Palette(False)  # no ANSI colour inside a Markdown file
+    lines: List[str] = []
+    add = lines.append
+
+    local_total = sum(result.local_files.values())
+    remote_total = sum(result.remote_files.values())
+    dup_file_count = sum(len(g.local_paths) for g in result.duplicate_groups)
+    dup_bytes = sum(g.size * len(g.local_paths) for g in result.duplicate_groups)
+    local_only_bytes = sum(
+        result.local_files.get(p, 0) for p in result.local_only
+    )
+    renamed_file_count = sum(len(g.local_paths) for g in result.renamed_groups)
+    renamed_bytes = sum(
+        g.size * len(g.local_paths) for g in result.renamed_groups
+    )
+
+    add("# Duplicate File Report")
+    add("")
+    add(f"- **Local roots:** {', '.join(result.local_roots)}")
+    add(f"- **Remote:** {result.remote_host}")
+    add(f"- **Remote roots:** {', '.join(result.remote_roots)}")
+    add(f"- **Hash algorithm:** {result.algorithm}")
+    if result.exclude:
+        add(f"- **Excluding:** {', '.join(result.exclude)}")
+    add("")
+
+    if dup_file_count:
+        add(
+            f"## ✓ {dup_file_count} duplicated file"
+            f"{'s' if dup_file_count != 1 else ''} found on the remote"
+        )
+        add("")
+        add(
+            f"_{len(result.duplicate_groups)} distinct, "
+            f"{human_size(dup_bytes)}_"
+        )
+    else:
+        add("## No duplicated files found on the remote")
+    if renamed_file_count:
+        add("")
+        add(
+            f"**↺ {renamed_file_count} renamed duplicate"
+            f"{'s' if renamed_file_count != 1 else ''}** "
+            f"(same content, different name) — {human_size(renamed_bytes)}"
+        )
+    add("")
+
+    add("## Summary")
+    add("")
+    add("| Metric | Value |")
+    add("| --- | --- |")
+    add(f"| Local files scanned | {len(result.local_files)} ({human_size(local_total)}) |")
+    add(
+        f"| Remote files scanned | {len(result.remote_files)} "
+        f"({human_size(remote_total)}) |"
+    )
+    add(
+        f"| Files hashed (local / remote) | {result.local_files_hashed} / "
+        f"{result.remote_files_hashed} |"
+    )
+    add(f"| Time hashing local | {human_time(result.local_hash_seconds)} |")
+    add(f"| Time hashing remote | {human_time(result.remote_hash_seconds)} |")
+    add(f"| Total run time | {human_time(result.total_seconds)} |")
+    add(
+        f"| Duplicated local files | {dup_file_count} "
+        f"({human_size(dup_bytes)}) |"
+    )
+    add(f"| Distinct duplicate groups | {len(result.duplicate_groups)} |")
+    if result.renamed_checked:
+        add(
+            f"| Renamed duplicates | {renamed_file_count} "
+            f"({human_size(renamed_bytes)}) |"
+        )
+    add(
+        f"| Local files NOT on remote | {len(result.local_only)} "
+        f"({human_size(local_only_bytes)}) |"
+    )
+    add(f"| Remote files not matched | {len(result.remote_only)} |")
+    add("")
+
+    add("## Duplicated files")
+    add("")
+    add("_Local tree → remote location_")
+    add("")
+    add("```text")
+    lines.extend(_strip_indent(render_duplicate_tree(result, plain)))
+    add("```")
+    add("")
+
+    if result.renamed_checked:
+        add("## Renamed duplicates")
+        add("")
+        add("_Identical content, different filename_")
+        add("")
+        add("```text")
+        lines.extend(
+            _strip_indent(
+                _render_groups_as_tree(
+                    result.renamed_groups,
+                    result.local_roots,
+                    plain,
+                    "checked, none found — no unmatched local file has a "
+                    "same-content copy on the remote",
+                )
+            )
+        )
+        add("```")
+        add("")
+
+    add("## Local files with no remote duplicate")
+    add("")
+    if not result.local_only:
+        add("_(none)_")
+    else:
+        for path in result.local_only:
+            add(f"- `{path}` ({human_size(result.local_files[path])})")
+    add("")
+
+    add("## Remote files not matched locally")
+    add("")
+    if not result.remote_only:
+        add("_(none)_")
+    elif not show_remote_only:
+        add(
+            f"_{len(result.remote_only)} remote files have no local match "
+            f"(hidden; use --show-remote-only or the JSON output to list them)._"
+        )
+    else:
+        for path in result.remote_only:
+            add(f"- `{path}` ({human_size(result.remote_files[path])})")
+    add("")
+
+    add("## Remote commands executed")
+    add("")
+    add("_All read-only._")
+    add("")
+    add("```sh")
+    for cmd in result.remote_commands:
+        add(cmd)
+    add("```")
+    add("")
+
+    return "\n".join(lines)
+
+
+def _strip_indent(tree_lines: List[str]) -> List[str]:
+    """Drop the leading two-space indent the tree renderer adds for the console,
+    so trees sit flush inside a Markdown code block."""
+    out = []
+    for line in tree_lines:
+        out.append(line[2:] if line.startswith("  ") else line)
+    return out
+
+
 def render_json(result: ScanResult) -> str:
     """Render the full result as JSON for downstream tooling."""
     payload = {
@@ -403,6 +586,9 @@ def render_json(result: ScanResult) -> str:
             "remote_bytes": sum(result.remote_files.values()),
             "local_files_hashed": result.local_files_hashed,
             "remote_files_hashed": result.remote_files_hashed,
+            "local_hash_seconds": round(result.local_hash_seconds, 3),
+            "remote_hash_seconds": round(result.remote_hash_seconds, 3),
+            "total_seconds": round(result.total_seconds, 3),
             "duplicate_groups": len(result.duplicate_groups),
             "duplicated_local_files": sum(
                 len(g.local_paths) for g in result.duplicate_groups

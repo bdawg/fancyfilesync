@@ -21,6 +21,7 @@ never transfer file contents over the WAN.
 from __future__ import annotations
 
 import os
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Sequence
@@ -102,6 +103,12 @@ class ScanResult:
     local_files_hashed: int = 0
     remote_files_hashed: int = 0
 
+    # Wall-clock time spent hashing on each side, and the overall run time, in
+    # seconds. Hash times cover both the main pass and the rename pass.
+    local_hash_seconds: float = 0.0
+    remote_hash_seconds: float = 0.0
+    total_seconds: float = 0.0
+
     # The exact commands issued on the remote host (audit trail).
     remote_commands: List[str] = field(default_factory=list)
 
@@ -130,6 +137,10 @@ def find_duplicates(
     def report(message: str) -> None:
         if progress is not None:
             progress(message)
+
+    start_total = time.monotonic()
+    # Accumulates hashing time across the main pass and the rename pass.
+    timings = {"local_hash": 0.0, "remote_hash": 0.0}
 
     exclude = list(exclude)
 
@@ -182,10 +193,14 @@ def find_duplicates(
     )
 
     report("Hashing candidate local files...")
+    _t = time.monotonic()
     local_hashes = local_mod.hash_local_files(local_to_hash, algorithm)
+    timings["local_hash"] += time.monotonic() - _t
 
     report("Hashing candidate remote files (on the remote machine)...")
+    _t = time.monotonic()
     remote_hashes = remote.hash_files(remote_to_hash, algorithm)
+    timings["remote_hash"] += time.monotonic() - _t
 
     # Group hashed files by (filename, digest). Requiring the filename to match
     # here too means two files with identical content but different names are
@@ -231,6 +246,7 @@ def find_duplicates(
             remote=remote,
             algorithm=algorithm,
             report=report,
+            timings=timings,
         )
 
     local_only = sorted(p for p in local_files if p not in matched_local)
@@ -251,6 +267,9 @@ def find_duplicates(
         exclude=exclude,
         local_files_hashed=len(local_hashes),
         remote_files_hashed=len(remote_hashes),
+        local_hash_seconds=timings["local_hash"],
+        remote_hash_seconds=timings["remote_hash"],
+        total_seconds=time.monotonic() - start_total,
         remote_commands=list(remote.executed_commands),
     )
 
@@ -265,11 +284,13 @@ def _find_renamed(
     remote: RemoteExecutor,
     algorithm: str,
     report,
+    timings: Dict[str, float],
 ) -> List[RenamedGroup]:
     """Second pass: match leftover local files to remote files by content only.
 
     Mutates ``matched_local`` / ``matched_remote`` / the hash caches so the
     caller's downstream stats and local_only/remote_only lists stay correct.
+    ``timings`` is updated with any additional hashing time.
     """
     remaining_local = [p for p in local_files if p not in matched_local]
     if not remaining_local:
@@ -291,11 +312,15 @@ def _find_renamed(
     local_to_hash = [p for p in remaining_local if p not in local_hashes]
     if local_to_hash:
         report("Hashing leftover local files...")
+        _t = time.monotonic()
         local_hashes.update(local_mod.hash_local_files(local_to_hash, algorithm))
+        timings["local_hash"] += time.monotonic() - _t
     remote_to_hash = [p for p in remote_candidates if p not in remote_hashes]
     if remote_to_hash:
         report("Hashing extra remote candidates (on the remote machine)...")
+        _t = time.monotonic()
         remote_hashes.update(remote.hash_files(remote_to_hash, algorithm))
+        timings["remote_hash"] += time.monotonic() - _t
 
     # Group by content alone (name ignored).
     local_by_digest: Dict[str, List[str]] = defaultdict(list)

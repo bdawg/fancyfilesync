@@ -71,6 +71,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also write the full result as JSON to FILE.",
     )
     parser.add_argument(
+        "--md",
+        metavar="FILE",
+        help="Also write the report as a formatted Markdown file.",
+    )
+    parser.add_argument(
         "--max-examples",
         type=int,
         default=0,
@@ -182,6 +187,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         with open(args.json, "w", encoding="utf-8") as handle:
             handle.write(report_mod.render_json(result))
         print(f"\nFull JSON report written to {args.json}", file=sys.stderr)
+
+    if args.md:
+        with open(args.md, "w", encoding="utf-8") as handle:
+            handle.write(
+                report_mod.render_markdown(
+                    result, show_remote_only=args.show_remote_only
+                )
+            )
+        print(f"Markdown report written to {args.md}", file=sys.stderr)
 
     return 0
 
