@@ -145,6 +145,43 @@ def test_match_renamed_finds_renamed_copy(tmp_path):
     assert str(local_dir / "orphan.dat") in result.local_only
 
 
+def test_exclude_skips_files_on_both_sides(tmp_path):
+    local_dir = tmp_path / "local"
+    junk = b"\x00\x01junk metadata"
+    real = b"a genuine duplicate payload" * 20
+    _write(str(local_dir / ".DS_Store"), junk)
+    _write(str(local_dir / "sub" / "keep.bin"), real)
+    # An excluded directory's contents should also be skipped.
+    _write(str(local_dir / ".git" / "config"), b"gitconfig")
+
+    remote = FakeRemote(
+        {
+            "/remote/.DS_Store": junk,  # same name+size, would be hashed if kept
+            "/remote/elsewhere/keep.bin": real,
+            "/remote/proj/.git/config": b"gitconfig",
+        }
+    )
+
+    result = find_duplicates(
+        [str(local_dir)],
+        remote,
+        ["/remote"],
+        exclude=[".DS_Store", ".git"],
+    )
+
+    # Excluded names never appear anywhere in the result.
+    all_local = set(result.local_files)
+    assert not any(".DS_Store" in p or ".git" in p for p in all_local)
+    assert not any(".DS_Store" in p or ".git" in p for p in result.remote_files)
+
+    # The real file is still matched, and the junk was never hashed.
+    assert len(result.duplicate_groups) == 1
+    assert result.duplicate_groups[0].name == "keep.bin"
+    assert result.local_files_hashed == 1
+    assert result.remote_files_hashed == 1
+    assert result.exclude == [".DS_Store", ".git"]
+
+
 def test_unique_names_are_never_hashed(tmp_path):
     local_dir = tmp_path / "local"
     _write(str(local_dir / "x"), b"short")

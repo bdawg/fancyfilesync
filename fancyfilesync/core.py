@@ -95,6 +95,9 @@ class ScanResult:
     # "checked, none found" rather than staying silent).
     renamed_checked: bool = False
 
+    # Glob patterns excluded from both the local and remote scans.
+    exclude: List[str] = field(default_factory=list)
+
     # How many files actually had to be hashed on each side, for transparency.
     local_files_hashed: int = 0
     remote_files_hashed: int = 0
@@ -109,6 +112,7 @@ def find_duplicates(
     remote_dirs: Sequence[str],
     algorithm: str = "sha256",
     match_renamed: bool = False,
+    exclude: Sequence[str] = (),
     progress=None,
 ) -> ScanResult:
     """Run the full pipeline and return a :class:`ScanResult`.
@@ -127,12 +131,29 @@ def find_duplicates(
         if progress is not None:
             progress(message)
 
+    exclude = list(exclude)
+
     report("Scanning local files...")
-    local_files = local_mod.scan_local(local_dirs)
+    local_files = local_mod.scan_local(local_dirs, exclude=exclude)
     report(f"  found {len(local_files)} local files")
 
     report("Listing remote files (metadata only)...")
     remote_listing = remote.list_files(remote_dirs)
+    # Apply the same exclusions to the remote side. A pattern matches if any
+    # path component matches it, so excluding e.g. ".git" drops everything under
+    # any .git directory, mirroring how the local walk prunes directories. The
+    # remote listing is metadata-only and cheap, so filtering here (rather than
+    # in the remote command) keeps the read-only command set unchanged.
+    if exclude:
+        remote_listing = [
+            (size, path)
+            for size, path in remote_listing
+            if not any(
+                local_mod.is_excluded(part, exclude)
+                for part in path.split("/")
+                if part
+            )
+        ]
     remote_files: Dict[str, int] = {path: size for size, path in remote_listing}
     report(f"  found {len(remote_files)} remote files")
 
@@ -227,6 +248,7 @@ def find_duplicates(
         remote_only=remote_only,
         renamed_groups=renamed_groups,
         renamed_checked=match_renamed,
+        exclude=exclude,
         local_files_hashed=len(local_hashes),
         remote_files_hashed=len(remote_hashes),
         remote_commands=list(remote.executed_commands),

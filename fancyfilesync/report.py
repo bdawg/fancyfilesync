@@ -247,6 +247,8 @@ def render_text(
     add(f"  Remote      : {result.remote_host}")
     add(f"  Remote roots: {', '.join(result.remote_roots)}")
     add(f"  Hash algo   : {result.algorithm}")
+    if result.exclude:
+        add(f"  Excluding   : {', '.join(result.exclude)}")
     add("")
 
     # -- headline summary ---------------------------------------------------
@@ -393,6 +395,7 @@ def render_json(result: ScanResult) -> str:
         "local_roots": result.local_roots,
         "remote_host": result.remote_host,
         "remote_roots": result.remote_roots,
+        "exclude": result.exclude,
         "summary": {
             "local_files": len(result.local_files),
             "remote_files": len(result.remote_files),

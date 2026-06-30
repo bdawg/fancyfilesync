@@ -33,6 +33,12 @@ REMOTE_DIRS = [
 # Hash algorithm: "sha256" (default), "sha1", or "md5". Must exist on the remote.
 ALGO = "sha256"
 
+# Glob patterns to skip on BOTH sides (matched on file/directory name). Handy
+# for junk that pollutes the scan. Add more as needed, e.g. "*.tmp", ".git".
+EXCLUDE = [
+    ".DS_Store",
+]
+
 # Extra ssh options, each passed as `ssh -o OPT`. e.g. ["Port=2222"].
 SSH_OPTIONS = []
 
@@ -73,6 +79,8 @@ def build_argv():
     for directory in REMOTE_DIRS:
         argv += ["--remote-dir", directory]
     argv += ["--algo", ALGO]
+    for pattern in EXCLUDE:
+        argv += ["--exclude", pattern]
     for opt in SSH_OPTIONS:
         argv += ["--ssh-option", opt]
     if JSON_OUTPUT:

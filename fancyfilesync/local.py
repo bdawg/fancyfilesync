@@ -7,24 +7,37 @@ HASH_PROGRAMS`) so the digests are directly comparable.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import os
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Sequence
 
 _CHUNK_SIZE = 1024 * 1024  # 1 MiB
 
 
-def scan_local(directories: Iterable[str]) -> Dict[str, int]:
+def is_excluded(name: str, patterns: Sequence[str]) -> bool:
+    """True if ``name`` (a basename) matches any of the glob ``patterns``."""
+    return any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+
+
+def scan_local(
+    directories: Iterable[str], exclude: Sequence[str] = ()
+) -> Dict[str, int]:
     """Walk ``directories`` and return ``{absolute_path: size_bytes}``.
 
-    Symlinks are not followed (we only report real files) and unreadable entries
-    are skipped with a warning rather than aborting the whole scan.
+    Files (and directories) whose basename matches an ``exclude`` glob pattern
+    are skipped entirely. Symlinks are not followed (we only report real files)
+    and unreadable entries are skipped with a warning rather than aborting.
     """
     results: Dict[str, int] = {}
     for directory in directories:
         root = os.path.abspath(directory)
-        for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            # Prune excluded directories in place so we don't descend into them.
+            dirnames[:] = [d for d in dirnames if not is_excluded(d, exclude)]
             for name in filenames:
+                if is_excluded(name, exclude):
+                    continue
                 path = os.path.join(dirpath, name)
                 if os.path.islink(path):
                     continue

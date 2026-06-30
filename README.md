@@ -84,6 +84,7 @@ Key options:
 | `--max-examples N` | Cap entries shown per section in the text report. |
 | `--color {auto,always,never}` | Colourise the report (`auto` = colour only on a terminal). |
 | `--match-renamed` | Also detect renamed copies: check whether unmatched local files are byte-identical to a remote file under a *different* name. |
+| `--exclude GLOB` | Skip files/directories whose name matches this glob, on both sides (repeatable). E.g. `--exclude .DS_Store --exclude .git`. |
 | `--show-remote-only` | List every unmatched remote file (off by default; huge on big trees). |
 | `--show-plan` | Print the exact read-only remote commands and exit **without connecting**. |
 | `--quiet` | Suppress progress output. |

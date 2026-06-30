@@ -99,6 +99,15 @@ def build_parser() -> argparse.ArgumentParser:
         "(matched by size, then content). Reported separately.",
     )
     parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Skip files/directories whose name matches this glob, on both "
+        "sides (repeatable). E.g. --exclude .DS_Store --exclude '*.tmp' "
+        "--exclude .git",
+    )
+    parser.add_argument(
         "--show-plan",
         action="store_true",
         help="Print the exact read-only commands that would run on the remote, "
@@ -135,6 +144,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         remote_dirs=args.remote_dir,
         algorithm=args.algo,
         match_renamed=args.match_renamed,
+        exclude=args.exclude,
         progress=progress,
     )
 
