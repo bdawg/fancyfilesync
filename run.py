@@ -17,16 +17,16 @@ from fancyfilesync.cli import main
 
 # Local directories to scan (fast). Add as many as you like.
 LOCAL_DIRS = [
-    "/path/to/local/folder",
+    "/Users/bnorris/DontBackup/syncdatatest",
     # "/another/local/folder",
 ]
 
 # SSH destination of the remote machine, or an alias from ~/.ssh/config.
-REMOTE_HOST = "user@remote-host"
+REMOTE_HOST = "bnorris@gateway.physics.usyd.edu.au"
 
 # Directories on the remote machine to scan (slow; read-only).
 REMOTE_DIRS = [
-    "/path/on/remote",
+    "/import/morgana1/snert/barnaby/PL",
     # "/another/remote/path",
 ]
 
@@ -41,6 +41,13 @@ JSON_OUTPUT = "result.json"
 
 # Cap entries shown per section in the text report (0 = no limit).
 MAX_EXAMPLES = 0
+
+# Colourise the report: "auto" (colour only on a terminal), "always", "never".
+COLOR = "auto"
+
+# List every remote file that has no local match. Usually noise on a big remote
+# tree, so off by default (the full list is still in the JSON output).
+SHOW_REMOTE_ONLY = False
 
 # Print the exact read-only remote commands and exit WITHOUT connecting.
 # Set True for a dry-run audit of what would run remotely.
@@ -67,6 +74,9 @@ def build_argv():
     if JSON_OUTPUT:
         argv += ["--json", JSON_OUTPUT]
     argv += ["--max-examples", str(MAX_EXAMPLES)]
+    argv += ["--color", COLOR]
+    if SHOW_REMOTE_ONLY:
+        argv += ["--show-remote-only"]
     if SHOW_PLAN:
         argv += ["--show-plan"]
     if QUIET:

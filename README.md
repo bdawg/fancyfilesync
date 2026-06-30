@@ -72,6 +72,7 @@ Key options:
 | `--ssh-option OPT` | Extra `ssh -o OPT`, e.g. `--ssh-option Port=2222`. |
 | `--json FILE` | Also write the complete result as JSON. |
 | `--max-examples N` | Cap entries shown per section in the text report. |
+| `--color {auto,always,never}` | Colourise the report (`auto` = colour only on a terminal). |
 | `--show-plan` | Print the exact read-only remote commands and exit **without connecting**. |
 | `--quiet` | Suppress progress output. |
 

@@ -79,6 +79,19 @@ def build_parser() -> argparse.ArgumentParser:
         "(0 = no limit; the JSON output is always complete).",
     )
     parser.add_argument(
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="Colourise the report. 'auto' (default) uses colour only when "
+        "writing to a terminal.",
+    )
+    parser.add_argument(
+        "--show-remote-only",
+        action="store_true",
+        help="List every remote file that has no local match. Off by default, "
+        "since the remote tree can contain huge numbers of unrelated files.",
+    )
+    parser.add_argument(
         "--show-plan",
         action="store_true",
         help="Print the exact read-only commands that would run on the remote, "
@@ -128,7 +141,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 0
 
-    print(report_mod.render_text(result, max_examples=args.max_examples))
+    if args.color == "always":
+        use_color = True
+    elif args.color == "never":
+        use_color = False
+    else:
+        use_color = sys.stdout.isatty()
+
+    text = report_mod.render_text(
+        result,
+        max_examples=args.max_examples,
+        color=use_color,
+        show_remote_only=args.show_remote_only,
+    )
+    try:
+        print(text)
+    except BrokenPipeError:
+        # Output was piped into something that closed early (e.g. `head`).
+        return 0
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as handle:

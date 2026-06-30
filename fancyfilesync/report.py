@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import List
+import os
+from typing import Dict, List, Union
 
-from .core import ScanResult
+from .core import DuplicateGroup, ScanResult
 
 
 def human_size(num_bytes: int) -> str:
@@ -20,110 +21,312 @@ def human_size(num_bytes: int) -> str:
     return f"{num_bytes} B"
 
 
-def render_text(result: ScanResult, max_examples: int = 0) -> str:
-    """Render a clear, scannable text report.
+# ---------------------------------------------------------------------------
+# Colour
+# ---------------------------------------------------------------------------
 
-    ``max_examples`` limits how many entries are listed under the
-    duplicate / local-only / remote-only sections (0 = no limit).
+
+class Palette:
+    """ANSI colour helper. When disabled, every method returns text unchanged."""
+
+    _CODES = {
+        "bold": "1",
+        "dim": "2",
+        "red": "31",
+        "green": "32",
+        "yellow": "33",
+        "blue": "34",
+        "magenta": "35",
+        "cyan": "36",
+    }
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+
+    def _wrap(self, codes: str, text: str) -> str:
+        if not self.enabled:
+            return text
+        return f"\033[{codes}m{text}\033[0m"
+
+    def bold(self, t: str) -> str:
+        return self._wrap(self._CODES["bold"], t)
+
+    def dim(self, t: str) -> str:
+        return self._wrap(self._CODES["dim"], t)
+
+    def red(self, t: str) -> str:
+        return self._wrap(self._CODES["red"], t)
+
+    def green(self, t: str) -> str:
+        return self._wrap(self._CODES["green"], t)
+
+    def yellow(self, t: str) -> str:
+        return self._wrap(self._CODES["yellow"], t)
+
+    def cyan(self, t: str) -> str:
+        return self._wrap(self._CODES["cyan"], t)
+
+    def dir(self, t: str) -> str:
+        return self._wrap(self._CODES["bold"] + ";" + self._CODES["blue"], t)
+
+
+# ---------------------------------------------------------------------------
+# Duplicate tree
+# ---------------------------------------------------------------------------
+
+# A tree node is either a sub-tree (dict) or a leaf (the DuplicateGroup the
+# file belongs to).
+TreeNode = Dict[str, Union["TreeNode", DuplicateGroup]]
+
+
+def _abspath_roots(roots: List[str]) -> List[str]:
+    return [os.path.abspath(r) for r in roots]
+
+
+def _root_for(path: str, roots: List[str]) -> str:
+    """Return the longest configured root that contains ``path`` (or "")."""
+    best = ""
+    for root in roots:
+        if path == root or path.startswith(root + os.sep):
+            if len(root) > len(best):
+                best = root
+    return best
+
+
+def _build_tree(paths_and_groups) -> TreeNode:
+    """Build a nested dict tree from ``(relative_path, group)`` pairs."""
+    root: TreeNode = {}
+    for rel_path, group in paths_and_groups:
+        parts = [p for p in rel_path.split(os.sep) if p]
+        node = root
+        for part in parts[:-1]:
+            child = node.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                node[part] = child
+            node = child
+        node[parts[-1]] = group
+    return root
+
+
+def _compress(tree: TreeNode) -> TreeNode:
+    """Collapse chains of single-child directories ("a/b/c") for readability."""
+    new: TreeNode = {}
+    for name, child in tree.items():
+        if isinstance(child, dict):
+            child = _compress(child)
+            while len(child) == 1:
+                ((only_name, only_child),) = child.items()
+                if isinstance(only_child, dict):
+                    name = name + "/" + only_name
+                    child = only_child
+                else:
+                    break
+            new[name] = child
+        else:
+            new[name] = child
+    return new
+
+
+def _render_tree(tree: TreeNode, palette: Palette, prefix: str = "") -> List[str]:
+    lines: List[str] = []
+    # Directories first, then files; both alphabetical.
+    items = sorted(
+        tree.items(),
+        key=lambda kv: (0 if isinstance(kv[1], dict) else 1, kv[0].lower()),
+    )
+    for index, (name, child) in enumerate(items):
+        last = index == len(items) - 1
+        connector = "└── " if last else "├── "
+        child_prefix = prefix + ("    " if last else "│   ")
+        if isinstance(child, dict):
+            lines.append(prefix + connector + palette.dir(name + "/"))
+            lines.extend(_render_tree(child, palette, child_prefix))
+        else:
+            group = child
+            label = (
+                prefix
+                + connector
+                + palette.green(name)
+                + "  "
+                + palette.dim(human_size(group.size))
+            )
+            lines.append(label)
+            # Show where each remote copy lives, nested under the file.
+            for r_index, remote_path in enumerate(group.remote_paths):
+                r_last = r_index == len(group.remote_paths) - 1
+                r_conn = "└─ " if r_last else "├─ "
+                lines.append(
+                    child_prefix
+                    + palette.dim(r_conn)
+                    + palette.cyan("→ " + remote_path)
+                )
+    return lines
+
+
+def render_duplicate_tree(result: ScanResult, palette: Palette) -> List[str]:
+    """Render the duplicated local files as a per-root tree."""
+    if not result.duplicate_groups:
+        return ["  " + palette.dim("(no duplicates found)")]
+
+    roots = _abspath_roots(result.local_roots)
+    # Bucket every duplicated local file under the root it belongs to.
+    by_root: Dict[str, list] = {}
+    for group in result.duplicate_groups:
+        for path in group.local_paths:
+            root = _root_for(path, roots)
+            rel = os.path.relpath(path, root) if root else path
+            by_root.setdefault(root, []).append((rel, group))
+
+    lines: List[str] = []
+    for root in sorted(by_root):
+        header = root if root else "(other)"
+        lines.append("  " + palette.dir(header + "/"))
+        tree = _compress(_build_tree(by_root[root]))
+        for line in _render_tree(tree, palette, prefix="  "):
+            lines.append(line)
+        lines.append("")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Full text report
+# ---------------------------------------------------------------------------
+
+
+def render_text(
+    result: ScanResult,
+    max_examples: int = 0,
+    color: bool = False,
+    show_remote_only: bool = False,
+) -> str:
+    """Render a clear, scannable, optionally-coloured text report.
+
+    ``max_examples`` limits how many entries are listed under the local-only /
+    remote-only sections (0 = no limit). ``color`` enables ANSI colour.
+
+    ``show_remote_only`` controls whether every unmatched remote file is listed.
+    It defaults to False because the remote tree can contain hundreds of
+    thousands of files that are simply not in your local set; the full list is
+    rarely useful and is always available via ``--json``.
     """
+    p = Palette(color)
     lines: List[str] = []
     add = lines.append
-
-    def total_size(paths, lookup) -> int:
-        return sum(lookup.get(p, 0) for p in paths)
 
     local_total = sum(result.local_files.values())
     remote_total = sum(result.remote_files.values())
 
-    dup_local_paths = [p for g in result.duplicate_groups for p in g.local_paths]
+    dup_file_count = sum(len(g.local_paths) for g in result.duplicate_groups)
     dup_bytes = sum(g.size * len(g.local_paths) for g in result.duplicate_groups)
-    local_only_bytes = total_size(result.local_only, result.local_files)
+    local_only_bytes = sum(result.local_files.get(p_, 0) for p_ in result.local_only)
 
-    add("=" * 70)
-    add("  DUPLICATE FILE REPORT")
-    add("=" * 70)
+    add(p.bold("=" * 70))
+    add(p.bold("  DUPLICATE FILE REPORT"))
+    add(p.bold("=" * 70))
     add(f"  Local roots : {', '.join(result.local_roots)}")
     add(f"  Remote      : {result.remote_host}")
     add(f"  Remote roots: {', '.join(result.remote_roots)}")
     add(f"  Hash algo   : {result.algorithm}")
     add("")
+
+    # -- headline summary ---------------------------------------------------
+    if dup_file_count:
+        headline = (
+            p.green(p.bold(f"✓ {dup_file_count} duplicated file"))
+            + p.green(p.bold("s" if dup_file_count != 1 else ""))
+            + p.green(p.bold(" found on the remote"))
+            + p.dim(
+                f"  ({len(result.duplicate_groups)} distinct, "
+                f"{human_size(dup_bytes)})"
+            )
+        )
+    else:
+        headline = p.yellow(p.bold("No duplicated files found on the remote"))
+    add("  " + headline)
+    add("")
+
     add("  SUMMARY")
     add("  " + "-" * 66)
     add(
-        f"  Local files scanned       : {len(result.local_files):>8}  "
+        f"  Local files scanned        : {len(result.local_files):>8}  "
         f"({human_size(local_total)})"
     )
     add(
-        f"  Remote files scanned      : {len(result.remote_files):>8}  "
+        f"  Remote files scanned       : {len(result.remote_files):>8}  "
         f"({human_size(remote_total)})"
     )
     add(
-        f"  Files hashed (local/remote): {result.local_files_hashed:>7}"
+        f"  Files hashed (local/remote): {result.local_files_hashed:>8}"
         f" / {result.remote_files_hashed}"
     )
-    add("")
     add(
-        f"  Duplicate groups          : {len(result.duplicate_groups):>8}"
+        "  "
+        + p.green(
+            f"Duplicated local files     : {dup_file_count:>8}  "
+            f"({human_size(dup_bytes)})"
+        )
     )
+    add(f"  Distinct duplicate groups  : {len(result.duplicate_groups):>8}")
     add(
-        f"  Local files WITH a remote copy : {len(dup_local_paths):>8}  "
-        f"({human_size(dup_bytes)})"
+        "  "
+        + p.yellow(
+            f"Local files NOT on remote  : {len(result.local_only):>8}  "
+            f"({human_size(local_only_bytes)})"
+        )
     )
-    add(
-        f"  Local files with NO remote copy: {len(result.local_only):>8}  "
-        f"({human_size(local_only_bytes)})"
-    )
-    add(
-        f"  Remote files not matched       : {len(result.remote_only):>8}"
-    )
+    add(f"  Remote files not matched   : {len(result.remote_only):>8}")
     add("")
 
-    add("  DUPLICATES  (identical contents, local <-> remote)")
+    # -- duplicates as a tree ----------------------------------------------
+    add(p.bold("  DUPLICATED FILES") + p.dim("  (local tree → remote location)"))
     add("  " + "-" * 66)
-    if not result.duplicate_groups:
-        add("    (none)")
-    else:
-        shown = _limit(result.duplicate_groups, max_examples)
-        for group in shown:
-            add(
-                f"  {group.name}  [{human_size(group.size)}]  "
-                f"{group.digest[:16]}..."
-            )
-            for path in group.local_paths:
-                add(f"      local  : {path}")
-            for path in group.remote_paths:
-                add(f"      remote : {path}")
-            add("")
-        _maybe_more(add, len(result.duplicate_groups), len(shown), "groups")
+    lines.extend(render_duplicate_tree(result, p))
     add("")
 
-    add("  LOCAL FILES WITH NO REMOTE DUPLICATE")
+    # -- supporting flat lists ---------------------------------------------
+    add(p.bold("  LOCAL FILES WITH NO REMOTE DUPLICATE"))
     add("  " + "-" * 66)
     if not result.local_only:
-        add("    (none)")
+        add("    " + p.dim("(none)"))
     else:
         shown = _limit(result.local_only, max_examples)
         for path in shown:
-            add(f"      {path}  ({human_size(result.local_files[path])})")
-        _maybe_more(add, len(result.local_only), len(shown), "files")
+            add(f"      {path}  " + p.dim(f"({human_size(result.local_files[path])})"))
+        _maybe_more(add, len(result.local_only), len(shown), "files", p)
     add("")
 
-    add("  REMOTE FILES NOT MATCHED LOCALLY")
+    add(p.bold("  REMOTE FILES NOT MATCHED LOCALLY"))
     add("  " + "-" * 66)
     if not result.remote_only:
-        add("    (none)")
+        add("    " + p.dim("(none)"))
+    elif not show_remote_only:
+        # The remote tree is often huge and mostly unrelated to the local set,
+        # so we summarise instead of flooding the screen.
+        add(
+            "    "
+            + p.dim(
+                f"{len(result.remote_only)} remote files have no local match "
+                f"(hidden; use --show-remote-only or --json to list them)"
+            )
+        )
     else:
         shown = _limit(result.remote_only, max_examples)
         for path in shown:
-            add(f"      {path}  ({human_size(result.remote_files[path])})")
-        _maybe_more(add, len(result.remote_only), len(shown), "files")
+            add(
+                f"      {path}  "
+                + p.dim(f"({human_size(result.remote_files[path])})")
+            )
+        _maybe_more(add, len(result.remote_only), len(shown), "files", p)
     add("")
 
-    add("  REMOTE COMMANDS EXECUTED  (all read-only)")
+    add(p.bold("  REMOTE COMMANDS EXECUTED") + p.dim("  (all read-only)"))
     add("  " + "-" * 66)
     for cmd in result.remote_commands:
-        add(f"      {cmd}")
-    add("=" * 70)
+        add("      " + p.dim(cmd))
+    add(p.bold("=" * 70))
 
     return "\n".join(lines)
 
@@ -143,6 +346,9 @@ def render_json(result: ScanResult) -> str:
             "local_files_hashed": result.local_files_hashed,
             "remote_files_hashed": result.remote_files_hashed,
             "duplicate_groups": len(result.duplicate_groups),
+            "duplicated_local_files": sum(
+                len(g.local_paths) for g in result.duplicate_groups
+            ),
             "local_only": len(result.local_only),
             "remote_only": len(result.remote_only),
         },
@@ -174,6 +380,12 @@ def _limit(items, max_examples):
     return items
 
 
-def _maybe_more(add, total, shown, noun):
+def _maybe_more(add, total, shown, noun, palette):
     if shown < total:
-        add(f"    ... and {total - shown} more {noun} (use --json for the full list)")
+        add(
+            "    "
+            + palette.dim(
+                f"... and {total - shown} more {noun} "
+                f"(use --json for the full list)"
+            )
+        )
