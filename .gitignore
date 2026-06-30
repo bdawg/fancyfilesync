@@ -1,0 +1,13 @@
+/local/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Tool output
+result.json
+*.json.tmp
