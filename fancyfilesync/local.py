@@ -62,17 +62,24 @@ def hash_local_file(path: str, algorithm: str) -> str:
     return hasher.hexdigest()
 
 
-def hash_local_files(paths: List[str], algorithm: str) -> Dict[str, str]:
+def hash_local_files(
+    paths: List[str], algorithm: str, on_progress=None
+) -> Dict[str, str]:
     """Hash many local files, returning ``{path: hex_digest}``.
 
-    Files that cannot be read are skipped with a warning.
+    Files that cannot be read are skipped with a warning. ``on_progress(done,
+    total)`` is called after each file (including skipped ones) so callers can
+    show a live counter.
     """
     results: Dict[str, str] = {}
-    for path in paths:
+    total = len(paths)
+    for index, path in enumerate(paths, start=1):
         try:
             results[path] = hash_local_file(path, algorithm)
         except OSError as exc:
             _warn(f"cannot read {path!r}: {exc}")
+        if on_progress is not None:
+            on_progress(index, total)
     return results
 
 

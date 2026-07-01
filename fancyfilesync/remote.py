@@ -32,8 +32,9 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import threading
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
 # The read-only contract.
@@ -138,13 +139,19 @@ class RemoteExecutor:
         return results
 
     def hash_files(
-        self, paths: Sequence[str], algorithm: str
+        self,
+        paths: Sequence[str],
+        algorithm: str,
+        on_progress: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, str]:
         """Hash the given remote files *on the remote machine*.
 
         Only the resulting hash strings come back across the network; the file
         contents never leave the remote host. Returns a mapping of
         ``{remote_path: hex_digest}``.
+
+        ``on_progress(done, total)`` is called as each remote hash completes, so
+        callers can show a live counter.
         """
         if algorithm not in HASH_PROGRAMS:
             raise ValueError(
@@ -167,33 +174,62 @@ class RemoteExecutor:
         stdin = b"\0".join(
             p.encode("utf-8", "surrogateescape") for p in paths
         )
-        stdout, stderr, code = self._run_remote(
-            command,
-            programs=("xargs", program),
-            stdin=stdin,
-            allow_nonzero=True,
+        total = len(paths)
+
+        # Validate and record before doing anything (the read-only choke point).
+        self._assert_read_only(("xargs", program))
+        self.executed_commands.append(command)
+        if self.dry_run:
+            return result
+
+        # Stream sha*sum's stdout: it prints one line per file as it finishes,
+        # so reading line by line lets us report live progress.
+        argv = [self.ssh_binary, *self.ssh_options, self.host, command]
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        if code != 0 and stderr.strip():
-            _warn(f"remote hashing reported: {stderr.strip()}")
-        result.update(_parse_hash_output(stdout))
+
+        # Feed stdin from a separate thread so a large file list can't deadlock
+        # against the stdout we're draining at the same time.
+        def _feed() -> None:
+            try:
+                proc.stdin.write(stdin)
+            except BrokenPipeError:
+                pass
+            finally:
+                proc.stdin.close()
+
+        feeder = threading.Thread(target=_feed)
+        feeder.start()
+
+        done = 0
+        for raw_line in proc.stdout:
+            parsed = _parse_hash_line(raw_line.decode("utf-8", "surrogateescape"))
+            if parsed is None:
+                continue
+            path, digest = parsed
+            result[path] = digest
+            done += 1
+            if on_progress is not None:
+                on_progress(done, total)
+
+        feeder.join()
+        proc.wait()
+        stderr_text = proc.stderr.read().decode("utf-8", "replace")
+        if proc.returncode != 0 and stderr_text.strip():
+            _warn(f"remote hashing reported: {stderr_text.strip()}")
         return result
 
     # -- the single execution choke point -----------------------------------
 
-    def _run_remote(
-        self,
-        command: str,
-        programs: Sequence[str],
-        stdin: Optional[bytes] = None,
-        allow_nonzero: bool = False,
-    ) -> Tuple[bytes, str, int]:
-        """Validate and run a single remote command. The only exec path.
+    def _assert_read_only(self, programs: Sequence[str]) -> None:
+        """Raise :class:`UnsafeRemoteCommand` unless every program is allowed.
 
-        ``programs`` lists every program the ``command`` string invokes. Each is
-        checked against :data:`ALLOWED_REMOTE_PROGRAMS` before anything runs; an
-        unlisted program raises :class:`UnsafeRemoteCommand` and nothing is
-        executed. This is what makes the read-only guarantee structural rather
-        than merely conventional.
+        This is the structural guarantee: nothing reaches the remote without
+        first passing through this allowlist check.
         """
         for program in programs:
             if program not in ALLOWED_REMOTE_PROGRAMS:
@@ -202,6 +238,20 @@ class RemoteExecutor:
                     f"Only these read-only programs are permitted: "
                     f"{sorted(ALLOWED_REMOTE_PROGRAMS)}"
                 )
+
+    def _run_remote(
+        self,
+        command: str,
+        programs: Sequence[str],
+        stdin: Optional[bytes] = None,
+        allow_nonzero: bool = False,
+    ) -> Tuple[bytes, str, int]:
+        """Validate and run a single remote command (non-streaming exec path).
+
+        ``programs`` lists every program the ``command`` string invokes; each is
+        checked against :data:`ALLOWED_REMOTE_PROGRAMS` before anything runs.
+        """
+        self._assert_read_only(programs)
 
         self.executed_commands.append(command)
 
@@ -257,18 +307,31 @@ def _parse_hash_output(data: bytes) -> Dict[str, str]:
     results: Dict[str, str] = {}
     text = data.decode("utf-8", "surrogateescape")
     for line in text.splitlines():
-        if not line:
-            continue
-        escaped = line.startswith("\\")
-        if escaped:
-            line = line[1:]
-        digest, sep, path = line.partition("  ")
-        if not sep:
-            continue  # not a hash line
-        if escaped:
-            path = _unescape_coreutils(path)
-        results[path] = digest
+        parsed = _parse_hash_line(line)
+        if parsed is not None:
+            path, digest = parsed
+            results[path] = digest
     return results
+
+
+def _parse_hash_line(line: str) -> Optional[Tuple[str, str]]:
+    """Parse one coreutils ``<hexdigest>  <path>`` line into ``(path, digest)``.
+
+    Returns ``None`` for blank or non-hash lines. Reverses coreutils' escaping
+    of paths containing a newline or backslash.
+    """
+    line = line.rstrip("\n")
+    if not line:
+        return None
+    escaped = line.startswith("\\")
+    if escaped:
+        line = line[1:]
+    digest, sep, path = line.partition("  ")
+    if not sep:
+        return None  # not a hash line
+    if escaped:
+        path = _unescape_coreutils(path)
+    return path, digest
 
 
 def _unescape_coreutils(path: str) -> str:

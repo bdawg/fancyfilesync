@@ -143,6 +143,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.quiet:
             print(message, file=sys.stderr)
 
+    def hash_progress(stage: str, done: int, total: int) -> None:
+        if args.quiet:
+            return
+        # Update a single line in place; finish with a newline at completion.
+        where = "local" if stage == "local" else "remote"
+        sys.stderr.write(f"\r    hashed {done}/{total} files on {where}   ")
+        if done >= total:
+            sys.stderr.write("\n")
+        sys.stderr.flush()
+
     result = find_duplicates(
         local_dirs=args.local,
         remote=remote,
@@ -151,6 +161,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         match_renamed=args.match_renamed,
         exclude=args.exclude,
         progress=progress,
+        hash_progress=hash_progress,
     )
 
     if args.show_plan:

@@ -17,7 +17,7 @@ from fancyfilesync.cli import main
 
 # Local directories to scan (fast). Add as many as you like.
 LOCAL_DIRS = [
-    "/Users/bnorris/DontBackup/syncdatatest",
+    "/Users/bnorris/DontBackup/PL_data",
     # "/another/local/folder",
 ]
 
@@ -27,7 +27,7 @@ REMOTE_HOST = "bnorris@gateway.physics.usyd.edu.au"
 # Directories on the remote machine to scan (slow; read-only).
 REMOTE_DIRS = [
     "/import/morgana1/snert/barnaby/PL",
-    # "/another/remote/path",
+    "/import/roci1/bnorris/PL",
 ]
 
 # Hash algorithm: "sha256" (default), "sha1", or "md5". Must exist on the remote.

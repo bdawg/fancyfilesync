@@ -121,6 +121,7 @@ def find_duplicates(
     match_renamed: bool = False,
     exclude: Sequence[str] = (),
     progress=None,
+    hash_progress=None,
 ) -> ScanResult:
     """Run the full pipeline and return a :class:`ScanResult`.
 
@@ -137,6 +138,14 @@ def find_duplicates(
     def report(message: str) -> None:
         if progress is not None:
             progress(message)
+
+    def local_progress(done: int, total: int) -> None:
+        if hash_progress is not None:
+            hash_progress("local", done, total)
+
+    def remote_progress(done: int, total: int) -> None:
+        if hash_progress is not None:
+            hash_progress("remote", done, total)
 
     start_total = time.monotonic()
     # Accumulates hashing time across the main pass and the rename pass.
@@ -194,12 +203,16 @@ def find_duplicates(
 
     report("Hashing candidate local files...")
     _t = time.monotonic()
-    local_hashes = local_mod.hash_local_files(local_to_hash, algorithm)
+    local_hashes = local_mod.hash_local_files(
+        local_to_hash, algorithm, on_progress=local_progress
+    )
     timings["local_hash"] += time.monotonic() - _t
 
     report("Hashing candidate remote files (on the remote machine)...")
     _t = time.monotonic()
-    remote_hashes = remote.hash_files(remote_to_hash, algorithm)
+    remote_hashes = remote.hash_files(
+        remote_to_hash, algorithm, on_progress=remote_progress
+    )
     timings["remote_hash"] += time.monotonic() - _t
 
     # Group hashed files by (filename, digest). Requiring the filename to match
@@ -247,6 +260,8 @@ def find_duplicates(
             algorithm=algorithm,
             report=report,
             timings=timings,
+            local_progress=local_progress,
+            remote_progress=remote_progress,
         )
 
     local_only = sorted(p for p in local_files if p not in matched_local)
@@ -285,6 +300,8 @@ def _find_renamed(
     algorithm: str,
     report,
     timings: Dict[str, float],
+    local_progress=None,
+    remote_progress=None,
 ) -> List[RenamedGroup]:
     """Second pass: match leftover local files to remote files by content only.
 
@@ -313,13 +330,21 @@ def _find_renamed(
     if local_to_hash:
         report("Hashing leftover local files...")
         _t = time.monotonic()
-        local_hashes.update(local_mod.hash_local_files(local_to_hash, algorithm))
+        local_hashes.update(
+            local_mod.hash_local_files(
+                local_to_hash, algorithm, on_progress=local_progress
+            )
+        )
         timings["local_hash"] += time.monotonic() - _t
     remote_to_hash = [p for p in remote_candidates if p not in remote_hashes]
     if remote_to_hash:
         report("Hashing extra remote candidates (on the remote machine)...")
         _t = time.monotonic()
-        remote_hashes.update(remote.hash_files(remote_to_hash, algorithm))
+        remote_hashes.update(
+            remote.hash_files(
+                remote_to_hash, algorithm, on_progress=remote_progress
+            )
+        )
         timings["remote_hash"] += time.monotonic() - _t
 
     # Group by content alone (name ignored).

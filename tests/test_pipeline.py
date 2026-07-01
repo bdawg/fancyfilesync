@@ -28,13 +28,18 @@ class FakeRemote:
                 out.append((len(data), path))
         return out
 
-    def hash_files(self, paths: Sequence[str], algorithm: str) -> Dict[str, str]:
+    def hash_files(
+        self, paths: Sequence[str], algorithm: str, on_progress=None
+    ) -> Dict[str, str]:
         self.executed_commands.append("xargs -0 sha256sum (fake)")
-        return {
-            p: hashlib.new(algorithm, self._files[p]).hexdigest()
-            for p in paths
-            if p in self._files
-        }
+        result = {}
+        total = len(paths)
+        for index, p in enumerate(paths, start=1):
+            if p in self._files:
+                result[p] = hashlib.new(algorithm, self._files[p]).hexdigest()
+            if on_progress is not None:
+                on_progress(index, total)
+        return result
 
 
 def _write(path: str, data: bytes):
