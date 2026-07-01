@@ -34,7 +34,7 @@ import shlex
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, ClassVar, Dict, List, Optional, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
 # The read-only contract.
@@ -100,6 +100,9 @@ class RemoteExecutor:
         are recorded in :attr:`executed_commands` and empty output is returned.
         Useful for auditing exactly what the tool would do remotely.
     """
+
+    # Distinguishes this from local.LocalTarget in the pipeline/report.
+    is_local: ClassVar[bool] = False
 
     host: str
     ssh_binary: str = "ssh"

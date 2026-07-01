@@ -99,6 +99,9 @@ class ScanResult:
     # Glob patterns excluded from both the local and remote scans.
     exclude: List[str] = field(default_factory=list)
 
+    # True when the "remote" side is actually a second local directory set.
+    remote_is_local: bool = False
+
     # How many files actually had to be hashed on each side, for transparency.
     local_files_hashed: int = 0
     remote_files_hashed: int = 0
@@ -151,13 +154,17 @@ def find_duplicates(
     # Accumulates hashing time across the main pass and the rename pass.
     timings = {"local_hash": 0.0, "remote_hash": 0.0}
 
+    remote_is_local = getattr(remote, "is_local", False)
+    where = "locally" if remote_is_local else "on the remote machine"
+    side_b = "second-location" if remote_is_local else "remote"
+
     exclude = list(exclude)
 
     report("Scanning local files...")
     local_files = local_mod.scan_local(local_dirs, exclude=exclude)
     report(f"  found {len(local_files)} local files")
 
-    report("Listing remote files (metadata only)...")
+    report(f"Listing {side_b} files (metadata only)...")
     remote_listing = remote.list_files(remote_dirs)
     # Apply the same exclusions to the remote side. A pattern matches if any
     # path component matches it, so excluding e.g. ".git" drops everything under
@@ -175,7 +182,7 @@ def find_duplicates(
             )
         ]
     remote_files: Dict[str, int] = {path: size for size, path in remote_listing}
-    report(f"  found {len(remote_files)} remote files")
+    report(f"  found {len(remote_files)} {side_b} files")
 
     # Group paths by (filename, size) on each side. Duplicates are assumed to
     # share a filename, so only files matching on both name and size can
@@ -197,7 +204,7 @@ def find_duplicates(
     ]
     report(
         f"Name+size pre-filter: {len(local_to_hash)} local and "
-        f"{len(remote_to_hash)} remote files share a filename and size "
+        f"{len(remote_to_hash)} {side_b} files share a filename and size "
         f"and need hashing"
     )
 
@@ -208,7 +215,7 @@ def find_duplicates(
     )
     timings["local_hash"] += time.monotonic() - _t
 
-    report("Hashing candidate remote files (on the remote machine)...")
+    report(f"Hashing candidate {side_b} files ({where})...")
     _t = time.monotonic()
     remote_hashes = remote.hash_files(
         remote_to_hash, algorithm, on_progress=remote_progress
@@ -280,6 +287,7 @@ def find_duplicates(
         renamed_groups=renamed_groups,
         renamed_checked=match_renamed,
         exclude=exclude,
+        remote_is_local=remote_is_local,
         local_files_hashed=len(local_hashes),
         remote_files_hashed=len(remote_hashes),
         local_hash_seconds=timings["local_hash"],

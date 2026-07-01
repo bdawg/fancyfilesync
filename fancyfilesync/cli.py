@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from . import report as report_mod
 from .core import find_duplicates
+from .local import LocalTarget
 from .remote import ALLOWED_REMOTE_PROGRAMS, RemoteExecutor
 
 
@@ -15,8 +16,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fancyfilesync",
         description=(
-            "Find local files that are duplicated on a remote machine, even "
-            "when the remote layout differs. Read-only on the remote side."
+            "Find local files that are duplicated on a remote machine (or a "
+            "second local directory), even when the layout differs. Read-only "
+            "on the remote side."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -40,9 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--remote-host",
-        required=True,
+        default=None,
         metavar="[user@]host",
-        help="SSH destination of the remote machine (or an ssh_config alias).",
+        help="SSH destination of the remote machine (or an ssh_config alias). "
+        "Omit this to treat --remote-dir as a second LOCAL directory set "
+        "(local-to-local comparison, no SSH).",
     )
     parser.add_argument(
         "--remote-dir",
@@ -129,15 +133,24 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
-    ssh_options: List[str] = ["-o", "BatchMode=yes"]
-    for opt in args.ssh_option:
-        ssh_options += ["-o", opt]
-
-    remote = RemoteExecutor(
-        host=args.remote_host,
-        ssh_options=ssh_options,
-        dry_run=args.show_plan,
-    )
+    if args.remote_host:
+        ssh_options: List[str] = ["-o", "BatchMode=yes"]
+        for opt in args.ssh_option:
+            ssh_options += ["-o", opt]
+        remote = RemoteExecutor(
+            host=args.remote_host,
+            ssh_options=ssh_options,
+            dry_run=args.show_plan,
+        )
+    else:
+        # No host given: compare against a second set of LOCAL directories.
+        if args.show_plan:
+            print(
+                "Both locations are local, so no remote commands are run "
+                "(nothing to preview)."
+            )
+            return 0
+        remote = LocalTarget()
 
     def progress(message: str) -> None:
         if not args.quiet:
@@ -147,7 +160,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.quiet:
             return
         # Update a single line in place; finish with a newline at completion.
-        where = "local" if stage == "local" else "remote"
+        if stage == "local":
+            where = "local"
+        else:
+            where = "second location" if remote.is_local else "remote"
         sys.stderr.write(f"\r    hashed {done}/{total} files on {where}   ")
         if done >= total:
             sys.stderr.write("\n")

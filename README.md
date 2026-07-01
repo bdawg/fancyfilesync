@@ -76,8 +76,8 @@ Key options:
 | Option | Meaning |
 | --- | --- |
 | `--local DIR` | A local directory to scan (repeatable). |
-| `--remote-host [user@]host` | SSH destination, or an `ssh_config` alias. |
-| `--remote-dir DIR` | A remote directory to scan (repeatable). |
+| `--remote-host [user@]host` | SSH destination, or an `ssh_config` alias. **Omit to compare against a second local directory set** (no SSH). |
+| `--remote-dir DIR` | A directory to compare against — remote, or local if `--remote-host` is omitted (repeatable). |
 | `--algo {sha256,sha1,md5}` | Hash algorithm (default `sha256`). |
 | `--ssh-option OPT` | Extra `ssh -o OPT`, e.g. `--ssh-option Port=2222`. |
 | `--json FILE` | Also write the complete result as JSON. |
@@ -88,6 +88,20 @@ Key options:
 | `--show-remote-only` | List every unmatched remote file (off by default; huge on big trees). |
 | `--show-plan` | Print the exact read-only remote commands and exit **without connecting**. |
 | `--quiet` | Suppress progress output. |
+
+### Comparing two local directory sets
+
+Omit `--remote-host` to compare against a second set of directories on the same
+machine (no SSH involved):
+
+```bash
+python -m fancyfilesync \
+  --local ~/Photos \
+  --remote-dir /Volumes/Backup/Photos
+```
+
+The report labels the second set "location B" instead of "remote", and no
+remote commands are run. In `run.py`, set `REMOTE_HOST = None` for this mode.
 
 ### See exactly what would run remotely
 

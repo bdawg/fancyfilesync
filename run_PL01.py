@@ -22,9 +22,12 @@ LOCAL_DIRS = [
 ]
 
 # SSH destination of the remote machine, or an alias from ~/.ssh/config.
+# Set to None (or "") to compare against a SECOND LOCAL directory set instead
+# of a remote machine (REMOTE_DIRS are then treated as local paths, no SSH).
 REMOTE_HOST = "bnorris@gateway.physics.usyd.edu.au"
 
-# Directories on the remote machine to scan (slow; read-only).
+# Directories to compare against (on the remote machine, or local if
+# REMOTE_HOST is None). Remote access is read-only.
 REMOTE_DIRS = [
     "/import/morgana1/snert/barnaby/PL",
     "/import/roci1/bnorris/PL",
@@ -78,7 +81,8 @@ def build_argv():
     argv = []
     for directory in LOCAL_DIRS:
         argv += ["--local", directory]
-    argv += ["--remote-host", REMOTE_HOST]
+    if REMOTE_HOST:
+        argv += ["--remote-host", REMOTE_HOST]
     for directory in REMOTE_DIRS:
         argv += ["--remote-dir", directory]
     argv += ["--algo", ALGO]

@@ -187,6 +187,31 @@ def test_exclude_skips_files_on_both_sides(tmp_path):
     assert result.exclude == [".DS_Store", ".git"]
 
 
+def test_local_to_local_comparison(tmp_path):
+    from fancyfilesync.local import LocalTarget
+
+    a = tmp_path / "A"
+    b = tmp_path / "B"
+    dup = b"shared content" * 40
+    _write(str(a / "photos" / "pic.jpg"), dup)
+    _write(str(a / "only_in_a.txt"), b"unique to A")
+    _write(str(b / "backup" / "pic.jpg"), dup)  # same name+content, diff path
+    _write(str(b / "only_in_b.txt"), b"unique to B")
+
+    result = find_duplicates([str(a)], LocalTarget(), [str(b)])
+
+    assert result.remote_is_local is True
+    assert len(result.duplicate_groups) == 1
+    group = result.duplicate_groups[0]
+    assert group.name == "pic.jpg"
+    assert group.local_paths == [str(a / "photos" / "pic.jpg")]
+    assert group.remote_paths == [str(b / "backup" / "pic.jpg")]
+    assert str(a / "only_in_a.txt") in result.local_only
+    assert str(b / "only_in_b.txt") in result.remote_only
+    # No SSH/commands are ever issued in local-to-local mode.
+    assert result.remote_commands == []
+
+
 def test_unique_names_are_never_hashed(tmp_path):
     local_dir = tmp_path / "local"
     _write(str(local_dir / "x"), b"short")

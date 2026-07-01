@@ -83,6 +83,31 @@ def hash_local_files(
     return results
 
 
+class LocalTarget:
+    """A drop-in replacement for :class:`~fancyfilesync.remote.RemoteExecutor`
+    when the second set of directories is also on the local machine.
+
+    It exposes the same ``list_files`` / ``hash_files`` interface the pipeline
+    expects, so comparing two local trees needs no other changes. There is no
+    SSH and no command execution, so ``executed_commands`` stays empty.
+    """
+
+    is_local = True
+
+    def __init__(self) -> None:
+        self.host = "(local filesystem)"
+        self.executed_commands: List[str] = []
+
+    def list_files(self, directories: Sequence[str]) -> List:
+        # Exclusions are applied centrally by the pipeline, so scan everything.
+        return [(size, path) for path, size in scan_local(directories).items()]
+
+    def hash_files(
+        self, paths: Sequence[str], algorithm: str, on_progress=None
+    ) -> Dict[str, str]:
+        return hash_local_files(list(paths), algorithm, on_progress=on_progress)
+
+
 def _warn(message: str) -> None:
     import sys
 

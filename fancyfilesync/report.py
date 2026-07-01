@@ -253,12 +253,21 @@ def render_text(
         g.size * len(g.local_paths) for g in result.renamed_groups
     )
 
+    # Wording differs when the "remote" side is actually a second local set.
+    is_local = result.remote_is_local
+    b_word = "second location" if is_local else "remote"
+    b_cap = b_word.capitalize()
+    found_phrase = "in the second location" if is_local else "on the remote"
+
     add(p.bold("=" * 70))
     add(p.bold("  DUPLICATE FILE REPORT"))
     add(p.bold("=" * 70))
     add(f"  Local roots : {', '.join(result.local_roots)}")
-    add(f"  Remote      : {result.remote_host}")
-    add(f"  Remote roots: {', '.join(result.remote_roots)}")
+    if is_local:
+        add(f"  Compared to : local filesystem")
+    else:
+        add(f"  Remote      : {result.remote_host}")
+    add(f"  {b_cap} roots: {', '.join(result.remote_roots)}")
     add(f"  Hash algo   : {result.algorithm}")
     if result.exclude:
         add(f"  Excluding   : {', '.join(result.exclude)}")
@@ -269,14 +278,16 @@ def render_text(
         headline = (
             p.green(p.bold(f"✓ {dup_file_count} duplicated file"))
             + p.green(p.bold("s" if dup_file_count != 1 else ""))
-            + p.green(p.bold(" found on the remote"))
+            + p.green(p.bold(f" found {found_phrase}"))
             + p.dim(
                 f"  ({len(result.duplicate_groups)} distinct, "
                 f"{human_size(dup_bytes)})"
             )
         )
     else:
-        headline = p.yellow(p.bold("No duplicated files found on the remote"))
+        headline = p.yellow(
+            p.bold(f"No duplicated files found {found_phrase}")
+        )
     add("  " + headline)
     if renamed_file_count:
         add(
@@ -292,57 +303,70 @@ def render_text(
         )
     add("")
 
+    # Short label for the second side used in the aligned summary column.
+    b_short = "location B" if is_local else "remote"
+    b_short_cap = "Location B" if is_local else "Remote"
+    hashed_sides = "A/B" if is_local else "local/remote"
+
+    def row(label: str, value: str) -> str:
+        return f"  {label:<26}: {value}"
+
     add("  SUMMARY")
     add("  " + "-" * 66)
+    add(row("Local files scanned", f"{len(result.local_files):>8}  ({human_size(local_total)})"))
     add(
-        f"  Local files scanned        : {len(result.local_files):>8}  "
-        f"({human_size(local_total)})"
+        row(
+            f"{b_short_cap} files scanned",
+            f"{len(result.remote_files):>8}  ({human_size(remote_total)})",
+        )
     )
     add(
-        f"  Remote files scanned       : {len(result.remote_files):>8}  "
-        f"({human_size(remote_total)})"
+        row(
+            f"Files hashed ({hashed_sides})",
+            f"{result.local_files_hashed} / {result.remote_files_hashed}",
+        )
     )
-    add(
-        f"  Files hashed (local/remote): {result.local_files_hashed:>8}"
-        f" / {result.remote_files_hashed}"
-    )
-    add(
-        f"  Time hashing local         : {human_time(result.local_hash_seconds):>8}"
-    )
-    add(
-        f"  Time hashing remote        : {human_time(result.remote_hash_seconds):>8}"
-    )
-    add(
-        f"  Total run time             : {human_time(result.total_seconds):>8}"
-    )
+    add(row("Time hashing local", human_time(result.local_hash_seconds)))
+    add(row(f"Time hashing {b_short}", human_time(result.remote_hash_seconds)))
+    add(row("Total run time", human_time(result.total_seconds)))
     add(
         "  "
         + p.green(
-            f"Duplicated local files     : {dup_file_count:>8}  "
-            f"({human_size(dup_bytes)})"
+            row("Duplicated local files", f"{dup_file_count:>8}  ({human_size(dup_bytes)})")[2:]
         )
     )
-    add(f"  Distinct duplicate groups  : {len(result.duplicate_groups):>8}")
+    add(row("Distinct duplicate groups", f"{len(result.duplicate_groups):>8}"))
     if result.renamed_checked:
         add(
             "  "
             + p.cyan(
-                f"Renamed duplicates         : {renamed_file_count:>8}  "
-                f"({human_size(renamed_bytes)})"
+                row(
+                    "Renamed duplicates",
+                    f"{renamed_file_count:>8}  ({human_size(renamed_bytes)})",
+                )[2:]
             )
         )
+    local_only_label = (
+        "Local files not in location B" if is_local else "Local files not on remote"
+    )
     add(
         "  "
         + p.yellow(
-            f"Local files NOT on remote  : {len(result.local_only):>8}  "
-            f"({human_size(local_only_bytes)})"
+            row(
+                local_only_label,
+                f"{len(result.local_only):>8}  ({human_size(local_only_bytes)})",
+            )[2:]
         )
     )
-    add(f"  Remote files not matched   : {len(result.remote_only):>8}")
+    add(row(f"{b_short_cap} files not matched", f"{len(result.remote_only):>8}"))
     add("")
 
     # -- duplicates as a tree ----------------------------------------------
-    add(p.bold("  DUPLICATED FILES") + p.dim("  (local tree → remote location)"))
+    arrow_target = "location B" if is_local else "remote location"
+    add(
+        p.bold("  DUPLICATED FILES")
+        + p.dim(f"  (local tree → {arrow_target})")
+    )
     add("  " + "-" * 66)
     lines.extend(render_duplicate_tree(result, p))
     add("")
@@ -360,13 +384,13 @@ def render_text(
                 result.local_roots,
                 p,
                 "checked, none found — no unmatched local file has a "
-                "same-content copy on the remote",
+                f"same-content copy in the {b_word}",
             )
         )
         add("")
 
     # -- supporting flat lists ---------------------------------------------
-    add(p.bold("  LOCAL FILES WITH NO REMOTE DUPLICATE"))
+    add(p.bold(f"  LOCAL FILES WITH NO {b_word.upper()} DUPLICATE"))
     add("  " + "-" * 66)
     if not result.local_only:
         add("    " + p.dim("(none)"))
@@ -377,17 +401,17 @@ def render_text(
         _maybe_more(add, len(result.local_only), len(shown), "files", p)
     add("")
 
-    add(p.bold("  REMOTE FILES NOT MATCHED LOCALLY"))
+    add(p.bold(f"  {b_word.upper()} FILES NOT MATCHED LOCALLY"))
     add("  " + "-" * 66)
     if not result.remote_only:
         add("    " + p.dim("(none)"))
     elif not show_remote_only:
-        # The remote tree is often huge and mostly unrelated to the local set,
+        # The other tree is often huge and mostly unrelated to the local set,
         # so we summarise instead of flooding the screen.
         add(
             "    "
             + p.dim(
-                f"{len(result.remote_only)} remote files have no local match "
+                f"{len(result.remote_only)} {b_word} files have no local match "
                 f"(hidden; use --show-remote-only or --json to list them)"
             )
         )
@@ -401,10 +425,16 @@ def render_text(
         _maybe_more(add, len(result.remote_only), len(shown), "files", p)
     add("")
 
-    add(p.bold("  REMOTE COMMANDS EXECUTED") + p.dim("  (all read-only)"))
-    add("  " + "-" * 66)
-    for cmd in result.remote_commands:
-        add("      " + p.dim(cmd))
+    if is_local:
+        add(
+            p.bold("  COMMANDS EXECUTED")
+            + p.dim("  (both locations are local — no remote commands run)")
+        )
+    else:
+        add(p.bold("  REMOTE COMMANDS EXECUTED") + p.dim("  (all read-only)"))
+        add("  " + "-" * 66)
+        for cmd in result.remote_commands:
+            add("      " + p.dim(cmd))
     add(p.bold("=" * 70))
 
     return "\n".join(lines)
@@ -433,11 +463,20 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
         g.size * len(g.local_paths) for g in result.renamed_groups
     )
 
+    is_local = result.remote_is_local
+    b_cap = "Second location" if is_local else "Remote"
+    b_word = "second location" if is_local else "remote"
+    found_phrase = "in the second location" if is_local else "on the remote"
+    arrow_target = "location B" if is_local else "remote location"
+
     add("# Duplicate File Report")
     add("")
     add(f"- **Local roots:** {', '.join(result.local_roots)}")
-    add(f"- **Remote:** {result.remote_host}")
-    add(f"- **Remote roots:** {', '.join(result.remote_roots)}")
+    if is_local:
+        add(f"- **Compared to:** local filesystem")
+    else:
+        add(f"- **Remote:** {result.remote_host}")
+    add(f"- **{b_cap} roots:** {', '.join(result.remote_roots)}")
     add(f"- **Hash algorithm:** {result.algorithm}")
     if result.exclude:
         add(f"- **Excluding:** {', '.join(result.exclude)}")
@@ -446,7 +485,7 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
     if dup_file_count:
         add(
             f"## ✓ {dup_file_count} duplicated file"
-            f"{'s' if dup_file_count != 1 else ''} found on the remote"
+            f"{'s' if dup_file_count != 1 else ''} found {found_phrase}"
         )
         add("")
         add(
@@ -454,7 +493,7 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
             f"{human_size(dup_bytes)}_"
         )
     else:
-        add("## No duplicated files found on the remote")
+        add(f"## No duplicated files found {found_phrase}")
     if renamed_file_count:
         add("")
         add(
@@ -470,15 +509,15 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
     add("| --- | --- |")
     add(f"| Local files scanned | {len(result.local_files)} ({human_size(local_total)}) |")
     add(
-        f"| Remote files scanned | {len(result.remote_files)} "
+        f"| {b_cap} files scanned | {len(result.remote_files)} "
         f"({human_size(remote_total)}) |"
     )
     add(
-        f"| Files hashed (local / remote) | {result.local_files_hashed} / "
-        f"{result.remote_files_hashed} |"
+        f"| Files hashed ({'A / B' if is_local else 'local / remote'}) | "
+        f"{result.local_files_hashed} / {result.remote_files_hashed} |"
     )
     add(f"| Time hashing local | {human_time(result.local_hash_seconds)} |")
-    add(f"| Time hashing remote | {human_time(result.remote_hash_seconds)} |")
+    add(f"| Time hashing {b_word} | {human_time(result.remote_hash_seconds)} |")
     add(f"| Total run time | {human_time(result.total_seconds)} |")
     add(
         f"| Duplicated local files | {dup_file_count} "
@@ -491,15 +530,15 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
             f"({human_size(renamed_bytes)}) |"
         )
     add(
-        f"| Local files NOT on remote | {len(result.local_only)} "
+        f"| Local files not in {b_word} | {len(result.local_only)} "
         f"({human_size(local_only_bytes)}) |"
     )
-    add(f"| Remote files not matched | {len(result.remote_only)} |")
+    add(f"| {b_cap} files not matched | {len(result.remote_only)} |")
     add("")
 
     add("## Duplicated files")
     add("")
-    add("_Local tree → remote location_")
+    add(f"_Local tree → {arrow_target}_")
     add("")
     add("```text")
     lines.extend(_strip_indent(render_duplicate_tree(result, plain)))
@@ -519,14 +558,14 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
                     result.local_roots,
                     plain,
                     "checked, none found — no unmatched local file has a "
-                    "same-content copy on the remote",
+                    f"same-content copy in the {b_word}",
                 )
             )
         )
         add("```")
         add("")
 
-    add("## Local files with no remote duplicate")
+    add(f"## Local files with no {b_word} duplicate")
     add("")
     if not result.local_only:
         add("_(none)_")
@@ -535,13 +574,13 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
             add(f"- `{path}` ({human_size(result.local_files[path])})")
     add("")
 
-    add("## Remote files not matched locally")
+    add(f"## {b_cap} files not matched locally")
     add("")
     if not result.remote_only:
         add("_(none)_")
     elif not show_remote_only:
         add(
-            f"_{len(result.remote_only)} remote files have no local match "
+            f"_{len(result.remote_only)} {b_word} files have no local match "
             f"(hidden; use --show-remote-only or the JSON output to list them)._"
         )
     else:
@@ -549,14 +588,19 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
             add(f"- `{path}` ({human_size(result.remote_files[path])})")
     add("")
 
-    add("## Remote commands executed")
-    add("")
-    add("_All read-only._")
-    add("")
-    add("```sh")
-    for cmd in result.remote_commands:
-        add(cmd)
-    add("```")
+    if is_local:
+        add("## Commands executed")
+        add("")
+        add("_Both locations are local — no remote commands were run._")
+    else:
+        add("## Remote commands executed")
+        add("")
+        add("_All read-only._")
+        add("")
+        add("```sh")
+        for cmd in result.remote_commands:
+            add(cmd)
+        add("```")
     add("")
 
     return "\n".join(lines)
