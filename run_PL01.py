@@ -65,6 +65,12 @@ SHOW_REMOTE_ONLY = False
 # copies of a remote file under a different name (matched by size then content).
 MATCH_RENAMED = False
 
+# Treat files sharing a filename AND size as duplicates WITHOUT hashing to
+# confirm. Fast (no file contents read on either side) but UNVERIFIED: different
+# files with the same name and size will be falsely reported as duplicates.
+# Ignores MATCH_RENAMED. The report prints a warning when this is on.
+ASSUME_NAME_SIZE = False
+
 # Print the exact read-only remote commands and exit WITHOUT connecting.
 # Set True for a dry-run audit of what would run remotely.
 SHOW_PLAN = False
@@ -100,6 +106,8 @@ def build_argv():
         argv += ["--show-remote-only"]
     if MATCH_RENAMED:
         argv += ["--match-renamed"]
+    if ASSUME_NAME_SIZE:
+        argv += ["--assume-name-size"]
     if SHOW_PLAN:
         argv += ["--show-plan"]
     if QUIET:

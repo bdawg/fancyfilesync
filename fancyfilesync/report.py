@@ -273,6 +273,35 @@ def render_text(
         add(f"  Excluding   : {', '.join(result.exclude)}")
     add("")
 
+    # -- unverified-mode warning -------------------------------------------
+    if result.assume_name_size:
+        add("  " + p.yellow(p.bold("!" * 66)))
+        add(
+            "  "
+            + p.yellow(
+                p.bold(
+                    "! WARNING: --assume-name-size is ON. Duplicates below are "
+                    "UNVERIFIED."
+                )
+            )
+        )
+        add(
+            "  "
+            + p.yellow(
+                "! Files were matched by filename + size only; their contents "
+                "were NOT"
+            )
+        )
+        add(
+            "  "
+            + p.yellow(
+                "! hashed. Different files sharing a name and size will show as "
+                "duplicates."
+            )
+        )
+        add("  " + p.yellow(p.bold("!" * 66)))
+        add("")
+
     # -- headline summary ---------------------------------------------------
     if dup_file_count:
         headline = (
@@ -482,6 +511,19 @@ def render_markdown(result: ScanResult, show_remote_only: bool = False) -> str:
         add(f"- **Excluding:** {', '.join(result.exclude)}")
     add("")
 
+    if result.assume_name_size:
+        add(
+            "> ⚠️ **WARNING: `--assume-name-size` is ON — duplicates are "
+            "UNVERIFIED.**"
+        )
+        add(">")
+        add(
+            "> Files were matched by filename + size only; their contents were "
+            "**not** hashed. Different files that happen to share a name and "
+            "size will be falsely reported as duplicates."
+        )
+        add("")
+
     if dup_file_count:
         add(
             f"## ✓ {dup_file_count} duplicated file"
@@ -623,6 +665,7 @@ def render_json(result: ScanResult) -> str:
         "remote_host": result.remote_host,
         "remote_roots": result.remote_roots,
         "exclude": result.exclude,
+        "assume_name_size": result.assume_name_size,
         "summary": {
             "local_files": len(result.local_files),
             "remote_files": len(result.remote_files),

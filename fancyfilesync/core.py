@@ -102,6 +102,10 @@ class ScanResult:
     # True when the "remote" side is actually a second local directory set.
     remote_is_local: bool = False
 
+    # True when duplicates were assumed from matching name+size WITHOUT hashing
+    # (fast but unverified -- the report warns about this).
+    assume_name_size: bool = False
+
     # How many files actually had to be hashed on each side, for transparency.
     local_files_hashed: int = 0
     remote_files_hashed: int = 0
@@ -122,6 +126,7 @@ def find_duplicates(
     remote_dirs: Sequence[str],
     algorithm: str = "sha256",
     match_renamed: bool = False,
+    assume_name_size: bool = False,
     exclude: Sequence[str] = (),
     progress=None,
     hash_progress=None,
@@ -133,6 +138,13 @@ def find_duplicates(
     files of the *same size, regardless of name*. This catches renamed copies.
     The extra hashing is scoped to those leftover files only, so the remote
     workload stays small.
+
+    When ``assume_name_size`` is True, files that share a filename and a size
+    are treated as duplicates *without hashing them to confirm*. This is fast
+    (no file contents are read on either side) but unverified: two different
+    files that happen to share a name and size will be falsely reported as
+    duplicates. ``match_renamed`` is ignored in this mode, since detecting
+    renames fundamentally requires content hashing.
 
     ``progress`` is an optional callable taking a single status string; pass a
     printer to get live feedback during long scans.
@@ -196,66 +208,92 @@ def find_duplicates(
 
     candidate_keys = set(local_by_key) & set(remote_by_key)
 
-    local_to_hash = [
-        path for key in candidate_keys for path in local_by_key[key]
-    ]
-    remote_to_hash = [
-        path for key in candidate_keys for path in remote_by_key[key]
-    ]
-    report(
-        f"Name+size pre-filter: {len(local_to_hash)} local and "
-        f"{len(remote_to_hash)} {side_b} files share a filename and size "
-        f"and need hashing"
-    )
-
-    report("Hashing candidate local files...")
-    _t = time.monotonic()
-    local_hashes = local_mod.hash_local_files(
-        local_to_hash, algorithm, on_progress=local_progress
-    )
-    timings["local_hash"] += time.monotonic() - _t
-
-    report(f"Hashing candidate {side_b} files ({where})...")
-    _t = time.monotonic()
-    remote_hashes = remote.hash_files(
-        remote_to_hash, algorithm, on_progress=remote_progress
-    )
-    timings["remote_hash"] += time.monotonic() - _t
-
-    # Group hashed files by (filename, digest). Requiring the filename to match
-    # here too means two files with identical content but different names are
-    # never reported as duplicates, per the stated assumption.
-    local_by_nd: Dict[tuple, List[str]] = defaultdict(list)
-    for path, digest in local_hashes.items():
-        local_by_nd[(_local_basename(path), digest)].append(path)
-    remote_by_nd: Dict[tuple, List[str]] = defaultdict(list)
-    for path, digest in remote_hashes.items():
-        remote_by_nd[(_remote_basename(path), digest)].append(path)
-
     duplicate_groups: List[DuplicateGroup] = []
     matched_local: set = set()
     matched_remote: set = set()
-    for key in set(local_by_nd) & set(remote_by_nd):
-        name, digest = key
-        local_paths = sorted(local_by_nd[key])
-        remote_paths = sorted(remote_by_nd[key])
-        size = local_files[local_paths[0]]
-        duplicate_groups.append(
-            DuplicateGroup(
-                name=name,
-                digest=digest,
-                size=size,
-                local_paths=local_paths,
-                remote_paths=remote_paths,
-            )
-        )
-        matched_local.update(local_paths)
-        matched_remote.update(remote_paths)
+    local_hashes: Dict[str, str] = {}
+    remote_hashes: Dict[str, str] = {}
 
-    duplicate_groups.sort(key=lambda g: g.size, reverse=True)
+    if assume_name_size:
+        # Fast path: treat every name+size match as a duplicate WITHOUT hashing.
+        report(
+            f"ASSUME NAME+SIZE mode: treating {len(candidate_keys)} name+size "
+            f"matches as duplicates without hashing (unverified)"
+        )
+        for key in candidate_keys:
+            name, size = key
+            local_paths = sorted(local_by_key[key])
+            remote_paths = sorted(remote_by_key[key])
+            duplicate_groups.append(
+                DuplicateGroup(
+                    name=name,
+                    digest="(not hashed: assumed from name+size)",
+                    size=size,
+                    local_paths=local_paths,
+                    remote_paths=remote_paths,
+                )
+            )
+            matched_local.update(local_paths)
+            matched_remote.update(remote_paths)
+        duplicate_groups.sort(key=lambda g: g.size, reverse=True)
+    else:
+        local_to_hash = [
+            path for key in candidate_keys for path in local_by_key[key]
+        ]
+        remote_to_hash = [
+            path for key in candidate_keys for path in remote_by_key[key]
+        ]
+        report(
+            f"Name+size pre-filter: {len(local_to_hash)} local and "
+            f"{len(remote_to_hash)} {side_b} files share a filename and size "
+            f"and need hashing"
+        )
+
+        report("Hashing candidate local files...")
+        _t = time.monotonic()
+        local_hashes = local_mod.hash_local_files(
+            local_to_hash, algorithm, on_progress=local_progress
+        )
+        timings["local_hash"] += time.monotonic() - _t
+
+        report(f"Hashing candidate {side_b} files ({where})...")
+        _t = time.monotonic()
+        remote_hashes = remote.hash_files(
+            remote_to_hash, algorithm, on_progress=remote_progress
+        )
+        timings["remote_hash"] += time.monotonic() - _t
+
+        # Group hashed files by (filename, digest). Requiring the filename to
+        # match here too means two files with identical content but different
+        # names are never reported as duplicates, per the stated assumption.
+        local_by_nd: Dict[tuple, List[str]] = defaultdict(list)
+        for path, digest in local_hashes.items():
+            local_by_nd[(_local_basename(path), digest)].append(path)
+        remote_by_nd: Dict[tuple, List[str]] = defaultdict(list)
+        for path, digest in remote_hashes.items():
+            remote_by_nd[(_remote_basename(path), digest)].append(path)
+
+        for key in set(local_by_nd) & set(remote_by_nd):
+            name, digest = key
+            local_paths = sorted(local_by_nd[key])
+            remote_paths = sorted(remote_by_nd[key])
+            size = local_files[local_paths[0]]
+            duplicate_groups.append(
+                DuplicateGroup(
+                    name=name,
+                    digest=digest,
+                    size=size,
+                    local_paths=local_paths,
+                    remote_paths=remote_paths,
+                )
+            )
+            matched_local.update(local_paths)
+            matched_remote.update(remote_paths)
+
+        duplicate_groups.sort(key=lambda g: g.size, reverse=True)
 
     renamed_groups: List[RenamedGroup] = []
-    if match_renamed:
+    if match_renamed and not assume_name_size:
         renamed_groups = _find_renamed(
             local_files=local_files,
             remote_files=remote_files,
@@ -285,9 +323,10 @@ def find_duplicates(
         local_only=local_only,
         remote_only=remote_only,
         renamed_groups=renamed_groups,
-        renamed_checked=match_renamed,
+        renamed_checked=match_renamed and not assume_name_size,
         exclude=exclude,
         remote_is_local=remote_is_local,
+        assume_name_size=assume_name_size,
         local_files_hashed=len(local_hashes),
         remote_files_hashed=len(remote_hashes),
         local_hash_seconds=timings["local_hash"],

@@ -108,6 +108,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(matched by size, then content). Reported separately.",
     )
     parser.add_argument(
+        "--assume-name-size",
+        action="store_true",
+        help="Treat files that share a filename AND size as duplicates WITHOUT "
+        "hashing to confirm. Fast (no file contents are read on either side), "
+        "but UNVERIFIED: different files with the same name and size will be "
+        "falsely reported as duplicates. Ignores --match-renamed.",
+    )
+    parser.add_argument(
         "--exclude",
         action="append",
         default=[],
@@ -152,6 +160,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
         remote = LocalTarget()
 
+    if args.assume_name_size:
+        print(
+            "WARNING: --assume-name-size is ON. Files sharing a name and size "
+            "will be reported as duplicates WITHOUT hashing to confirm; "
+            "matches are unverified.",
+            file=sys.stderr,
+        )
+
     def progress(message: str) -> None:
         if not args.quiet:
             print(message, file=sys.stderr)
@@ -175,6 +191,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         remote_dirs=args.remote_dir,
         algorithm=args.algo,
         match_renamed=args.match_renamed,
+        assume_name_size=args.assume_name_size,
         exclude=args.exclude,
         progress=progress,
         hash_progress=hash_progress,

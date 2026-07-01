@@ -52,6 +52,18 @@ to those leftover files (and reuses hashes already computed), the extra remote
 work stays small even on a huge remote tree. Renamed matches are reported in
 their own section so they're never confused with exact-name duplicates.
 
+### Skipping hashing entirely (`--assume-name-size`)
+
+For a quick, approximate scan, `--assume-name-size` treats any two files that
+share a **filename and size** as duplicates *without hashing them to confirm*.
+No file contents are read on either side, so it's fast and touches no disk data
+beyond the `find` listing — but it is **unverified**: two genuinely different
+files that happen to share a name and size (a classic example is `.DS_Store`)
+will be falsely reported as duplicates. Both the console and Markdown reports
+print a prominent warning while this mode is on, and it ignores `--match-renamed`
+(detecting renames requires content hashing). Use it to get a rough picture
+fast, then re-run without it to confirm anything that matters.
+
 ## Requirements
 
 - Python 3.8+ (standard library only; no third-party packages to run it).
@@ -84,6 +96,7 @@ Key options:
 | `--max-examples N` | Cap entries shown per section in the text report. |
 | `--color {auto,always,never}` | Colourise the report (`auto` = colour only on a terminal). |
 | `--match-renamed` | Also detect renamed copies: check whether unmatched local files are byte-identical to a remote file under a *different* name. |
+| `--assume-name-size` | Treat files sharing a name **and** size as duplicates **without hashing** to confirm — fast but unverified. |
 | `--exclude GLOB` | Skip files/directories whose name matches this glob, on both sides (repeatable). E.g. `--exclude .DS_Store --exclude .git`. |
 | `--show-remote-only` | List every unmatched remote file (off by default; huge on big trees). |
 | `--show-plan` | Print the exact read-only remote commands and exit **without connecting**. |

@@ -212,6 +212,70 @@ def test_local_to_local_comparison(tmp_path):
     assert result.remote_commands == []
 
 
+def test_assume_name_size_matches_without_hashing(tmp_path):
+    local_dir = tmp_path / "local"
+    dup = b"identical contents here" * 100
+    only_local = b"this one is unique locally"
+    same_name_diff = b"A" * len(only_local)  # same name+size, DIFFERENT content
+
+    _write(str(local_dir / "photos" / "a.jpg"), dup)
+    _write(str(local_dir / "notes.txt"), only_local)
+
+    remote = FakeRemote(
+        {
+            "/remote/backup/2021/a.jpg": dup,
+            # Same name AND size as notes.txt but different bytes.
+            "/remote/misc/notes.txt": same_name_diff,
+        }
+    )
+
+    result = find_duplicates(
+        local_dirs=[str(local_dir)],
+        remote=remote,
+        remote_dirs=["/remote"],
+        assume_name_size=True,
+    )
+
+    # Nothing is hashed on either side in this mode.
+    assert result.local_files_hashed == 0
+    assert result.remote_files_hashed == 0
+    assert result.assume_name_size is True
+    assert "xargs -0 sha256sum (fake)" not in remote.executed_commands
+
+    # BOTH name+size matches are reported as duplicates -- including the
+    # notes.txt pair, which differs in content (that's the documented risk).
+    names = sorted(g.name for g in result.duplicate_groups)
+    assert names == ["a.jpg", "notes.txt"]
+    for group in result.duplicate_groups:
+        assert group.digest == "(not hashed: assumed from name+size)"
+
+    # Everything matched, so nothing is left over.
+    assert result.local_only == []
+    assert result.remote_only == []
+
+
+def test_assume_name_size_ignores_match_renamed(tmp_path):
+    local_dir = tmp_path / "local"
+    renamed = b"same bytes under a new name" * 50
+    _write(str(local_dir / "report_final.pdf"), renamed)
+    remote = FakeRemote({"/remote/archive/report_v3.pdf": renamed})
+
+    # assume_name_size wins: no hashing, so no rename detection is possible.
+    result = find_duplicates(
+        [str(local_dir)],
+        remote,
+        ["/remote"],
+        assume_name_size=True,
+        match_renamed=True,
+    )
+    assert result.renamed_groups == []
+    assert result.renamed_checked is False
+    assert result.local_files_hashed == 0
+    # Different names, so not a name+size match either.
+    assert result.duplicate_groups == []
+    assert str(local_dir / "report_final.pdf") in result.local_only
+
+
 def test_unique_names_are_never_hashed(tmp_path):
     local_dir = tmp_path / "local"
     _write(str(local_dir / "x"), b"short")

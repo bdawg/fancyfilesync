@@ -17,7 +17,7 @@ from fancyfilesync.cli import main
 
 # Local directories to scan (fast). Add as many as you like.
 LOCAL_DIRS = [
-    "/Users/bnorris/DontBackup/syncdatatest",
+    "/Volumes/ExtSSD/FromPluto_ForWorkStorage/GLINTDATA_disk_copy_01042018",
     # "/another/local/folder",
 ]
 
@@ -29,8 +29,9 @@ REMOTE_HOST = "bnorris@gateway.physics.usyd.edu.au"
 # Directories to compare against (on the remote machine, or local if
 # REMOTE_HOST is None). Remote access is read-only.
 REMOTE_DIRS = [
-    "/import/morgana1/snert/barnaby/PL",
-    # "/another/remote/path",
+    "/import/morgana1/snert",
+    "/import/morgana2/snert",
+    # "/import/roci1/bnorris/PL",
 ]
 
 # Hash algorithm: "sha256" (default), "sha1", or "md5". Must exist on the remote.
@@ -69,7 +70,7 @@ MATCH_RENAMED = False
 # confirm. Fast (no file contents read on either side) but UNVERIFIED: different
 # files with the same name and size will be falsely reported as duplicates.
 # Ignores MATCH_RENAMED. The report prints a warning when this is on.
-ASSUME_NAME_SIZE = False
+ASSUME_NAME_SIZE = True
 
 # Print the exact read-only remote commands and exit WITHOUT connecting.
 # Set True for a dry-run audit of what would run remotely.
