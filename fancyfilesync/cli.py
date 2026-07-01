@@ -168,9 +168,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
 
+    # Track the in-place listing line so the next normal message can finish it
+    # with a newline (rather than printing over the top of it).
+    listing_active = {"on": False}
+
     def progress(message: str) -> None:
-        if not args.quiet:
-            print(message, file=sys.stderr)
+        if args.quiet:
+            return
+        if listing_active["on"]:
+            sys.stderr.write("\n")
+            listing_active["on"] = False
+        print(message, file=sys.stderr)
 
     def hash_progress(stage: str, done: int, total: int) -> None:
         if args.quiet:
@@ -185,6 +193,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             sys.stderr.write("\n")
         sys.stderr.flush()
 
+    def list_progress(side: str, count: int, current_dir=None) -> None:
+        # The remote find can walk a huge/slow tree for a long time; this shows
+        # a running count and the directory it's currently in, so it's clear the
+        # listing is still advancing (and roughly where).
+        if args.quiet:
+            return
+        where = ""
+        if current_dir:
+            shown = current_dir
+            if len(shown) > 60:  # keep the most specific (rightmost) part
+                shown = "..." + shown[-57:]
+            where = f"  in {shown}"
+        # Pad and clear to end of line so a shorter path can't leave stale text.
+        sys.stderr.write(
+            f"\r    listing {side} files: {count} found so far{where}\033[K"
+        )
+        sys.stderr.flush()
+        listing_active["on"] = True
+
     result = find_duplicates(
         local_dirs=args.local,
         remote=remote,
@@ -195,6 +222,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         exclude=args.exclude,
         progress=progress,
         hash_progress=hash_progress,
+        list_progress=list_progress,
     )
 
     if args.show_plan:

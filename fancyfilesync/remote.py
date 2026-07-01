@@ -116,29 +116,78 @@ class RemoteExecutor:
 
     # -- public, read-only operations ---------------------------------------
 
-    def list_files(self, directories: Sequence[str]) -> List[Tuple[int, str]]:
+    def list_files(
+        self,
+        directories: Sequence[str],
+        on_progress: Optional[Callable[[int, Optional[str]], None]] = None,
+    ) -> List[Tuple[int, str]]:
         """List every regular file under ``directories`` with its size.
 
         Returns a list of ``(size_bytes, path)`` tuples. This is the only cheap
         remote operation: it transfers just metadata (sizes + paths), never file
         contents, so it is safe to run over a slow link even for huge trees.
+
+        ``on_progress(count, current_dir)`` is called periodically with the
+        running number of files seen so far and the directory find is currently
+        walking (derived from the most recent path). Because the tree walk on a
+        large/slow remote can take a long time, this lets callers show that the
+        listing is still advancing rather than frozen.
         """
         results: List[Tuple[int, str]] = []
+        last_dir: Optional[str] = None
         for directory in directories:
             quoted = shlex.quote(directory)
             # %s = size in bytes, %p = path. Records are NUL-terminated and the
             # size/path are tab-separated, so filenames containing spaces,
             # tabs or newlines are handled correctly.
             command = f"find {quoted} -type f -printf '%s\\t%p\\0'"
+
+            # Validate and record before doing anything (read-only choke point).
+            self._assert_read_only(("find",))
+            self.executed_commands.append(command)
+            if self.dry_run:
+                continue
+
+            # Stream find's output as it arrives instead of buffering the whole
+            # (potentially enormous) result, so we can report live progress.
+            argv = [self.ssh_binary, *self.ssh_options, self.host, command]
+            proc = subprocess.Popen(
+                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            buffer = b""
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buffer += chunk
+                # Split on the NUL record terminator; the final element is a
+                # possibly-incomplete record we carry over to the next chunk.
+                records = buffer.split(b"\0")
+                buffer = records.pop()
+                for record in records:
+                    parsed = _parse_find_record(record)
+                    if parsed is not None:
+                        results.append(parsed)
+                        last_dir = _posix_dirname(parsed[1])
+                        if on_progress is not None and len(results) % 1000 == 0:
+                            on_progress(len(results), last_dir)
+            # Any bytes left after the last NUL (find NUL-terminates, so this is
+            # normally empty, but handle it defensively).
+            parsed = _parse_find_record(buffer)
+            if parsed is not None:
+                results.append(parsed)
+                last_dir = _posix_dirname(parsed[1])
+
+            proc.wait()
+            stderr_text = proc.stderr.read().decode("utf-8", "replace")
             # find returns non-zero if it hits an unreadable directory; that is
             # expected and harmless, so we keep whatever it managed to list.
-            stdout, stderr, code = self._run_remote(
-                command, programs=("find",), allow_nonzero=True
-            )
-            if code != 0 and stderr.strip():
+            if proc.returncode != 0 and stderr_text.strip():
                 # Surface permission warnings etc. without aborting the scan.
-                _warn(f"find on {directory!r} reported: {stderr.strip()}")
-            results.extend(_parse_find_output(stdout))
+                _warn(f"find on {directory!r} reported: {stderr_text.strip()}")
+
+        if on_progress is not None:
+            on_progress(len(results), last_dir)
         return results
 
     def hash_files(
@@ -282,21 +331,37 @@ class RemoteExecutor:
 # ---------------------------------------------------------------------------
 
 
+def _posix_dirname(path: str) -> str:
+    """Directory part of a POSIX remote path (``/a/b/c.txt`` -> ``/a/b``)."""
+    head = path.rsplit("/", 1)[0]
+    return head if head else "/"
+
+
+def _parse_find_record(record: bytes) -> Optional[Tuple[int, str]]:
+    """Parse a single ``<size>\\t<path>`` record from find, or ``None``.
+
+    Returns ``None`` for empty or malformed records so callers can skip them.
+    """
+    if not record:
+        return None
+    size_bytes, tab, path_bytes = record.partition(b"\t")
+    if not tab:
+        return None  # malformed record, skip defensively
+    try:
+        size = int(size_bytes)
+    except ValueError:
+        return None
+    path = path_bytes.decode("utf-8", "surrogateescape")
+    return size, path
+
+
 def _parse_find_output(data: bytes) -> List[Tuple[int, str]]:
     """Parse NUL-terminated ``<size>\\t<path>`` records from find."""
     results: List[Tuple[int, str]] = []
     for record in data.split(b"\0"):
-        if not record:
-            continue
-        size_bytes, tab, path_bytes = record.partition(b"\t")
-        if not tab:
-            continue  # malformed record, skip defensively
-        try:
-            size = int(size_bytes)
-        except ValueError:
-            continue
-        path = path_bytes.decode("utf-8", "surrogateescape")
-        results.append((size, path))
+        parsed = _parse_find_record(record)
+        if parsed is not None:
+            results.append(parsed)
     return results
 
 

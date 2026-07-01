@@ -130,6 +130,7 @@ def find_duplicates(
     exclude: Sequence[str] = (),
     progress=None,
     hash_progress=None,
+    list_progress=None,
 ) -> ScanResult:
     """Run the full pipeline and return a :class:`ScanResult`.
 
@@ -177,7 +178,12 @@ def find_duplicates(
     report(f"  found {len(local_files)} local files")
 
     report(f"Listing {side_b} files (metadata only)...")
-    remote_listing = remote.list_files(remote_dirs)
+
+    def listing_progress(count: int, current_dir=None) -> None:
+        if list_progress is not None:
+            list_progress(side_b, count, current_dir)
+
+    remote_listing = remote.list_files(remote_dirs, on_progress=listing_progress)
     # Apply the same exclusions to the remote side. A pattern matches if any
     # path component matches it, so excluding e.g. ".git" drops everything under
     # any .git directory, mirroring how the local walk prunes directories. The

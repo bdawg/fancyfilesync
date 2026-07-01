@@ -20,12 +20,17 @@ class FakeRemote:
         self.host = "fake-host"
         self.executed_commands: List[str] = []
 
-    def list_files(self, directories: Sequence[str]) -> List[Tuple[int, str]]:
+    def list_files(
+        self, directories: Sequence[str], on_progress=None
+    ) -> List[Tuple[int, str]]:
         self.executed_commands.append("find ... (fake)")
         out = []
         for path, data in self._files.items():
             if any(path.startswith(d.rstrip("/") + "/") or path == d for d in directories):
                 out.append((len(data), path))
+        if on_progress is not None:
+            last_dir = out[-1][1].rsplit("/", 1)[0] if out else None
+            on_progress(len(out), last_dir)
         return out
 
     def hash_files(

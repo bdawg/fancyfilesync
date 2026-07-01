@@ -98,9 +98,20 @@ class LocalTarget:
         self.host = "(local filesystem)"
         self.executed_commands: List[str] = []
 
-    def list_files(self, directories: Sequence[str]) -> List:
+    def list_files(
+        self, directories: Sequence[str], on_progress=None
+    ) -> List:
         # Exclusions are applied centrally by the pipeline, so scan everything.
-        return [(size, path) for path, size in scan_local(directories).items()]
+        # The local filesystem is fast, so we skip incremental progress and just
+        # report the final count and last directory seen (the parameter is
+        # accepted for interface parity with RemoteExecutor).
+        results = [
+            (size, path) for path, size in scan_local(directories).items()
+        ]
+        if on_progress is not None:
+            last_dir = os.path.dirname(results[-1][1]) if results else None
+            on_progress(len(results), last_dir)
+        return results
 
     def hash_files(
         self, paths: Sequence[str], algorithm: str, on_progress=None

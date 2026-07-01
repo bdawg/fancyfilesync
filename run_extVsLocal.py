@@ -17,23 +17,24 @@ from fancyfilesync.cli import main
 
 # Local directories to scan (fast). Add as many as you like.
 LOCAL_DIRS = [
-    "/Volumes/ExtSSD/FromPluto_ForWorkStorage/GLINTDATA_disk_copy_01042018",
+    "/Users/bnorris/DontBackup/PL_data",
     # "/another/local/folder",
 ]
 
 # SSH destination of the remote machine, or an alias from ~/.ssh/config.
 # Set to None (or "") to compare against a SECOND LOCAL directory set instead
 # of a remote machine (REMOTE_DIRS are then treated as local paths, no SSH).
-REMOTE_HOST = "bnorris@gateway.physics.usyd.edu.au"
+REMOTE_HOST = None #"bnorris@gateway.physics.usyd.edu.au"
 
 # Directories to compare against (on the remote machine, or local if
 # REMOTE_HOST is None). Remote access is read-only.
 REMOTE_DIRS = [
-    # "/import/morgana1/snert",
-    "/import/morgana2/snert",
+    "/Volumes/ExtSSD/PL_slices",
+    "/Volumes/ExtSSD/PL_labdata",
+    "/Volumes/ExtSSD/PL_data"
+    # "/import/morgana1/snert/barnaby/PL",
     # "/import/roci1/bnorris/PL",
 ]
-
 # Hash algorithm: "sha256" (default), "sha1", or "md5". Must exist on the remote.
 ALGO = "sha256"
 
@@ -70,7 +71,7 @@ MATCH_RENAMED = False
 # confirm. Fast (no file contents read on either side) but UNVERIFIED: different
 # files with the same name and size will be falsely reported as duplicates.
 # Ignores MATCH_RENAMED. The report prints a warning when this is on.
-ASSUME_NAME_SIZE = True
+ASSUME_NAME_SIZE = False
 
 # Print the exact read-only remote commands and exit WITHOUT connecting.
 # Set True for a dry-run audit of what would run remotely.
