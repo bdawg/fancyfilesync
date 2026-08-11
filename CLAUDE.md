@@ -17,6 +17,8 @@ python -m pytest tests/ -k assume_name_size     # one test
 
 python -m fancyfilesync --local ~/Photos \
   --remote-host user@nas --remote-dir /volume1/media --show-plan
+
+./report_from_json.py result.json --md report.md  # re-render a saved scan
 ```
 
 `--show-plan` prints the exact remote commands and exits without connecting —
@@ -84,6 +86,25 @@ and `is_local` is what makes the reports say "location B" instead of "remote".
 `Palette`, plus a compressed directory tree), `render_markdown`, `render_json`.
 Text and Markdown honour `--max-examples`; JSON is always complete. When adding
 a field to `ScanResult`, all three renderers usually need it.
+
+`--local-only-dirs` swaps the full report for
+`render_local_only_dirs` / `render_local_only_dirs_markdown`, a summary of
+`local_only` grouped by parent directory. Both renderers share
+`summarize_local_only_dirs`, which returns `(dirs, copy_roots)`: per-directory
+counts distinguish *direct* files (`total_files`, drives the complete-vs-mixed
+split the user reads) from the *subtree* rollup (`subtree_complete`, drives the
+recursive-copy advice) — keep those two separate, since a directory whose own
+files are all unmatched can still have a backed-up sub-directory. `copy_roots`
+is deliberately clamped to `local_roots` via `_root_for`, so a fully-unmatched
+scan suggests the roots rather than walking up to `/`.
+
+`jsonload.py` is the inverse of `render_json`: it rebuilds a `ScanResult` from a
+saved export so the same three renderers can run on an old scan with no
+filesystem or network access. `local_files` / `remote_files` are not stored
+verbatim in the JSON — they are reconstructed from the group/`local_only`/
+`remote_only` entries, which each carry a size. **A new `ScanResult` field
+therefore needs handling in `render_json` and `jsonload` together**, or the
+round-trip test in `tests/test_jsonload.py` will catch the drift.
 
 Progress reporting is threaded through as callbacks (`progress`,
 `hash_progress`, `list_progress`) that `cli.py` implements as in-place `\r`

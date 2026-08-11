@@ -23,11 +23,14 @@ from .core import (
     ScanResult,
     find_duplicates,
 )
+from .jsonload import load_scan_result, scan_result_from_json
 
 __all__ = [
     "DuplicateGroup",
     "RenamedGroup",
     "ScanResult",
     "find_duplicates",
+    "load_scan_result",
+    "scan_result_from_json",
 ]
 __version__ = "0.1.0"

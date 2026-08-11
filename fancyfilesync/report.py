@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Dict, List, Union
 
 from .core import DuplicateGroup, ScanResult
@@ -657,6 +658,403 @@ def _strip_indent(tree_lines: List[str]) -> List[str]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Local-only directory summary ("what do I need to copy over?")
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LocalOnlyDir:
+    """One directory that holds at least one local file with no counterpart.
+
+    ``total_files`` and ``unmatched_paths`` count only files sitting *directly*
+    in the directory; the ``subtree_*`` counts include everything beneath it.
+    The distinction matters when deciding how to copy: a directory can have all
+    of its own files unmatched while a sub-directory is already backed up.
+    """
+
+    path: str
+    unmatched_paths: List[str]
+    unmatched_bytes: int
+    total_files: int
+    subtree_total: int
+    subtree_unmatched: int
+    subtree_dirs: int
+
+    @property
+    def unmatched_files(self) -> int:
+        return len(self.unmatched_paths)
+
+    @property
+    def other_files(self) -> int:
+        """Files in this directory that DO exist on the other side."""
+        return self.total_files - self.unmatched_files
+
+    @property
+    def complete(self) -> bool:
+        """True if every file directly in this directory is unmatched."""
+        return self.other_files == 0
+
+    @property
+    def subtree_complete(self) -> bool:
+        """True if every file anywhere beneath this directory is unmatched, so
+        the whole thing can be copied recursively."""
+        return self.subtree_total == self.subtree_unmatched
+
+
+def _ancestors(directory: str) -> List[str]:
+    """``/a/b/c`` -> ``['/a/b/c', '/a/b', '/a', '/']`` (stops at the fs root)."""
+    out = []
+    current = directory
+    while True:
+        out.append(current)
+        parent = os.path.dirname(current)
+        if not parent or parent == current:
+            break
+        current = parent
+    return out
+
+
+def summarize_local_only_dirs(result: ScanResult):
+    """Group ``result.local_only`` by parent directory.
+
+    Returns ``(dirs, copy_roots)``. ``dirs`` is the list of
+    :class:`LocalOnlyDir` (largest unmatched payload first). ``copy_roots`` is
+    the minimal set of directories whose entire subtree is unmatched — copying
+    those recursively is the least fiddly way to move the bulk of the data, and
+    a directory is left out if an ancestor of it is already in the set.
+    """
+    unmatched = set(result.local_only)
+
+    direct_total: Dict[str, int] = {}
+    subtree_total: Dict[str, int] = {}
+    subtree_unmatched: Dict[str, int] = {}
+    subtree_dirs: Dict[str, set] = {}
+    by_dir: Dict[str, List[str]] = {}
+
+    for path in result.local_files:
+        parent = os.path.dirname(path)
+        direct_total[parent] = direct_total.get(parent, 0) + 1
+        is_unmatched = path in unmatched
+        if is_unmatched:
+            by_dir.setdefault(parent, []).append(path)
+        for ancestor in _ancestors(parent):
+            subtree_total[ancestor] = subtree_total.get(ancestor, 0) + 1
+            if is_unmatched:
+                subtree_unmatched[ancestor] = subtree_unmatched.get(ancestor, 0) + 1
+            if ancestor != parent:
+                subtree_dirs.setdefault(ancestor, set()).add(parent)
+
+    dirs = [
+        LocalOnlyDir(
+            path=directory,
+            unmatched_paths=sorted(paths),
+            unmatched_bytes=sum(result.local_files.get(p, 0) for p in paths),
+            total_files=direct_total.get(directory, 0),
+            subtree_total=subtree_total.get(directory, 0),
+            subtree_unmatched=subtree_unmatched.get(directory, 0),
+            subtree_dirs=len(subtree_dirs.get(directory, ())),
+        )
+        for directory, paths in by_dir.items()
+    ]
+    dirs.sort(key=lambda d: (-d.unmatched_bytes, d.path))
+
+    # Candidates for a recursive copy: any directory inside a configured local
+    # root whose whole subtree is unmatched. Staying inside the roots stops us
+    # ever suggesting "/" or a home directory when everything is unmatched.
+    roots = _abspath_roots(result.local_roots)
+    complete_subtrees = {
+        directory
+        for directory, total in subtree_total.items()
+        if total and subtree_unmatched.get(directory, 0) == total
+        and _root_for(directory, roots)
+    }
+    # Drop any directory an ancestor already covers.
+    copy_roots = sorted(
+        d
+        for d in complete_subtrees
+        if not any(a in complete_subtrees for a in _ancestors(d)[1:])
+    )
+    return dirs, copy_roots
+
+
+def render_local_only_dirs(
+    result: ScanResult, max_examples: int = 0, color: bool = False
+) -> str:
+    """Render the compact "which directories do I need to copy?" summary.
+
+    Instead of listing every unmatched local file, this lists the directories
+    containing them and says, for each, whether the directory holds *only*
+    unmatched files (copy it wholesale) or is mixed with files that already
+    exist on the other side.
+    """
+    p = Palette(color)
+    lines: List[str] = []
+    add = lines.append
+
+    is_local = result.remote_is_local
+    b_word = "second location" if is_local else "remote"
+    dirs, copy_roots = summarize_local_only_dirs(result)
+    unmatched_bytes = sum(d.unmatched_bytes for d in dirs)
+
+    add(p.bold("=" * 70))
+    add(p.bold("  DIRECTORIES TO COPY"))
+    add(p.dim(f"  Local files with no duplicate in the {b_word}"))
+    add(p.bold("=" * 70))
+    add(f"  Local roots : {', '.join(result.local_roots)}")
+    if is_local:
+        add("  Compared to : local filesystem")
+    else:
+        add(f"  Remote      : {result.remote_host}")
+    add(f"  {b_word.capitalize()} roots: {', '.join(result.remote_roots)}")
+    if result.exclude:
+        add(f"  Excluding   : {', '.join(result.exclude)}")
+    add("")
+
+    if result.assume_name_size:
+        add(
+            "  "
+            + p.yellow(
+                p.bold(
+                    "! --assume-name-size was ON: matches were never hashed, so "
+                    "a file missing from this list is only assumed to exist in "
+                    f"the {b_word}."
+                )
+            )
+        )
+        add("")
+
+    if not dirs:
+        add(
+            "  "
+            + p.green(
+                f"Every one of the {len(result.local_files)} local files was "
+                f"found in the {b_word} — nothing to copy."
+            )
+        )
+        add("")
+        add(p.bold("=" * 70))
+        return "\n".join(lines)
+
+    add(
+        "  "
+        + p.bold(
+            f"{len(result.local_only)} of {len(result.local_files)} local files "
+            f"({human_size(unmatched_bytes)}) have no {b_word} copy,"
+        )
+    )
+    add(
+        "  "
+        + p.bold(
+            f"spread over {len(dirs)} "
+            f"director{'y' if len(dirs) == 1 else 'ies'}."
+        )
+    )
+    add("")
+
+    whole = [d for d in dirs if d.complete]
+    mixed = [d for d in dirs if not d.complete]
+
+    add(p.bold("  COMPLETE DIRECTORIES") + p.dim("  (every file here is unmatched)"))
+    add("  " + "-" * 66)
+    if not whole:
+        add("    " + p.dim("(none — every directory below is mixed)"))
+    else:
+        shown = _limit(whole, max_examples)
+        for d in shown:
+            add("    " + p.dir(d.path + os.sep))
+            detail = (
+                f"{d.unmatched_files} file{'' if d.unmatched_files == 1 else 's'}"
+                f"   {human_size(d.unmatched_bytes)}"
+            )
+            if d.subtree_complete and d.subtree_dirs:
+                detail += (
+                    f"   · whole subtree unmatched "
+                    f"({d.subtree_dirs} sub-director"
+                    f"{'y' if d.subtree_dirs == 1 else 'ies'})"
+                )
+            elif not d.subtree_complete:
+                already = d.subtree_total - d.subtree_unmatched
+                detail += (
+                    f"   · but {already} file"
+                    f"{'' if already == 1 else 's'} in sub-directories "
+                    f"already exist{'s' if already == 1 else ''} "
+                    f"in the {b_word}"
+                )
+            add("        " + p.green(detail))
+        _maybe_more(add, len(whole), len(shown), "directories", p)
+    add("")
+
+    add(
+        p.bold("  MIXED DIRECTORIES")
+        + p.dim(f"  (also hold files that are already in the {b_word})")
+    )
+    add("  " + "-" * 66)
+    if not mixed:
+        add("    " + p.dim("(none)"))
+    else:
+        shown = _limit(mixed, max_examples)
+        for d in shown:
+            add("    " + p.dir(d.path + os.sep))
+            add(
+                "        "
+                + p.yellow(
+                    f"{d.unmatched_files} of {d.total_files} files unmatched"
+                    f"   {human_size(d.unmatched_bytes)}"
+                )
+                + p.dim(
+                    f"   · {d.other_files} other file"
+                    f"{'' if d.other_files == 1 else 's'} here "
+                    f"already in the {b_word}"
+                )
+            )
+        _maybe_more(add, len(mixed), len(shown), "directories", p)
+    add("")
+
+    if copy_roots:
+        add(
+            p.bold("  RECURSIVE COPY TARGETS")
+            + p.dim(f"  (nothing beneath these is in the {b_word})")
+        )
+        add("  " + "-" * 66)
+        shown = _limit(copy_roots, max_examples)
+        for directory in shown:
+            add("      " + p.cyan(directory))
+        _maybe_more(add, len(copy_roots), len(shown), "directories", p)
+        if mixed:
+            add(
+                "    "
+                + p.dim(
+                    "Files in the mixed directories above still need copying "
+                    "individually."
+                )
+            )
+        add("")
+
+    add(p.bold("=" * 70))
+    return "\n".join(lines)
+
+
+def render_local_only_dirs_markdown(
+    result: ScanResult, max_examples: int = 0
+) -> str:
+    """The directories-to-copy summary as a Markdown document."""
+    lines: List[str] = []
+    add = lines.append
+
+    is_local = result.remote_is_local
+    b_word = "second location" if is_local else "remote"
+    dirs, copy_roots = summarize_local_only_dirs(result)
+    unmatched_bytes = sum(d.unmatched_bytes for d in dirs)
+
+    add("# Directories To Copy")
+    add("")
+    add(f"Local files with no duplicate in the {b_word}.")
+    add("")
+    add(f"- **Local roots:** {', '.join(result.local_roots)}")
+    if is_local:
+        add("- **Compared to:** local filesystem")
+    else:
+        add(f"- **Remote:** {result.remote_host}")
+    add(f"- **{b_word.capitalize()} roots:** {', '.join(result.remote_roots)}")
+    if result.exclude:
+        add(f"- **Excluding:** {', '.join(result.exclude)}")
+    add("")
+
+    if result.assume_name_size:
+        add(
+            "> **Warning:** `--assume-name-size` was on, so matches were never "
+            "hashed. A file missing from this list is only *assumed* to exist "
+            f"in the {b_word}."
+        )
+        add("")
+
+    if not dirs:
+        add(
+            f"Every one of the {len(result.local_files)} local files was found "
+            f"in the {b_word} — nothing to copy."
+        )
+        add("")
+        return "\n".join(lines)
+
+    add(
+        f"**{len(result.local_only)} of {len(result.local_files)} local files "
+        f"({human_size(unmatched_bytes)})** have no {b_word} copy, spread over "
+        f"**{len(dirs)} director{'y' if len(dirs) == 1 else 'ies'}**."
+    )
+    add("")
+
+    whole = [d for d in dirs if d.complete]
+    mixed = [d for d in dirs if not d.complete]
+
+    add("## Complete directories")
+    add("")
+    add("Every file in these is unmatched — copy the directory wholesale.")
+    add("")
+    if not whole:
+        add("_(none — every directory below is mixed)_")
+    else:
+        add("| Directory | Files | Size | Subtree |")
+        add("| --- | ---: | ---: | --- |")
+        shown = _limit(whole, max_examples)
+        for d in shown:
+            if d.subtree_complete:
+                note = (
+                    f"all clear ({d.subtree_dirs} sub-dir"
+                    f"{'' if d.subtree_dirs == 1 else 's'})"
+                    if d.subtree_dirs
+                    else "no sub-directories"
+                )
+            else:
+                already = d.subtree_total - d.subtree_unmatched
+                note = f"{already} file(s) in sub-dirs already present"
+            add(
+                f"| `{d.path}` | {d.unmatched_files} | "
+                f"{human_size(d.unmatched_bytes)} | {note} |"
+            )
+        if max_examples and len(whole) > len(shown):
+            add("")
+            add(f"_... and {len(whole) - len(shown)} more directories._")
+    add("")
+
+    add("## Mixed directories")
+    add("")
+    add(f"These also hold files that already exist in the {b_word}.")
+    add("")
+    if not mixed:
+        add("_(none)_")
+    else:
+        add("| Directory | Unmatched | Size | Already present |")
+        add("| --- | ---: | ---: | ---: |")
+        shown = _limit(mixed, max_examples)
+        for d in shown:
+            add(
+                f"| `{d.path}` | {d.unmatched_files} of {d.total_files} | "
+                f"{human_size(d.unmatched_bytes)} | {d.other_files} |"
+            )
+        if max_examples and len(mixed) > len(shown):
+            add("")
+            add(f"_... and {len(mixed) - len(shown)} more directories._")
+    add("")
+
+    if copy_roots:
+        add("## Recursive copy targets")
+        add("")
+        add(f"Nothing anywhere beneath these exists in the {b_word}:")
+        add("")
+        for directory in _limit(copy_roots, max_examples):
+            add(f"- `{directory}`")
+        if mixed:
+            add("")
+            add(
+                "Files in the mixed directories above still need copying "
+                "individually."
+            )
+        add("")
+
+    return "\n".join(lines)
+
+
 def render_json(result: ScanResult) -> str:
     """Render the full result as JSON for downstream tooling."""
     payload = {
@@ -666,6 +1064,10 @@ def render_json(result: ScanResult) -> str:
         "remote_roots": result.remote_roots,
         "exclude": result.exclude,
         "assume_name_size": result.assume_name_size,
+        # Recorded so jsonload can rebuild the result exactly; older exports
+        # lack these and fall back to inferring them.
+        "renamed_checked": result.renamed_checked,
+        "remote_is_local": result.remote_is_local,
         "summary": {
             "local_files": len(result.local_files),
             "remote_files": len(result.remote_files),

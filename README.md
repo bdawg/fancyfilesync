@@ -116,6 +116,51 @@ python -m fancyfilesync \
 The report labels the second set "location B" instead of "remote", and no
 remote commands are run. In `run.py`, set `REMOTE_HOST = None` for this mode.
 
+### "Which directories do I need to copy?" (`--local-only-dirs`)
+
+Replaces the full report with a short summary of the local files that have **no**
+counterpart on the other side — grouped by the directory holding them instead of
+listed file by file:
+
+```bash
+python -m fancyfilesync --local ~/Photos \
+  --remote-host user@nas --remote-dir /volume1/media --local-only-dirs
+```
+
+Directories are split into two sections so it's clear how to copy each one:
+
+- **Complete directories** — every file in the directory is unmatched, so the
+  whole directory can be copied. If everything in its sub-directories is
+  unmatched too, it is marked *whole subtree unmatched*; if not, the summary
+  says how many files below it are already present.
+- **Mixed directories** — the directory also holds files that already exist on
+  the other side, shown as `3 of 11 files unmatched`, so you know a blanket copy
+  would duplicate data.
+
+A final **recursive copy targets** section lists the minimal set of directories
+whose entire subtree is unmatched (never widening beyond your `--local` roots) —
+copy those recursively and only the mixed directories need file-level attention.
+
+Works with `--md` (tables instead of text) and with `--max-examples`. The
+`--json` output is unaffected: it is always the complete result.
+
+### Re-rendering a report from a saved `result.json`
+
+A scan written with `--json` can be re-rendered later without re-scanning,
+re-hashing or contacting the remote — the JSON export is complete, so the
+report is rebuilt from the file alone:
+
+```bash
+./report_from_json.py result.json                       # text report
+./report_from_json.py result.json --md report.md        # Markdown
+./report_from_json.py result.json --show-remote-only    # list unmatched remote files
+./report_from_json.py result.json --local-only-dirs     # directories-to-copy summary
+```
+
+Useful for producing a Markdown copy of an old scan, or for listing the remote-only
+files from a run where that section was hidden. `python -m fancyfilesync.jsonload`
+is equivalent.
+
 ### See exactly what would run remotely
 
 ```bash

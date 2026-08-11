@@ -125,6 +125,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--exclude .git",
     )
     parser.add_argument(
+        "--local-only-dirs",
+        action="store_true",
+        help="Instead of the full report, print a short summary of the local "
+        "files that have NO match on the other side, grouped by the directory "
+        "holding them rather than listed file by file. Each directory says "
+        "whether all of its files are unmatched (copy it wholesale) or whether "
+        "it also holds files that already exist remotely. Affects the text and "
+        "--md output; --json is unchanged.",
+    )
+    parser.add_argument(
         "--show-plan",
         action="store_true",
         help="Print the exact read-only commands that would run on the remote, "
@@ -243,12 +253,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         use_color = sys.stdout.isatty()
 
-    text = report_mod.render_text(
-        result,
-        max_examples=args.max_examples,
-        color=use_color,
-        show_remote_only=args.show_remote_only,
-    )
+    if args.local_only_dirs:
+        text = report_mod.render_local_only_dirs(
+            result, max_examples=args.max_examples, color=use_color
+        )
+    else:
+        text = report_mod.render_text(
+            result,
+            max_examples=args.max_examples,
+            color=use_color,
+            show_remote_only=args.show_remote_only,
+        )
     try:
         print(text)
     except BrokenPipeError:
@@ -261,12 +276,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"\nFull JSON report written to {args.json}", file=sys.stderr)
 
     if args.md:
-        with open(args.md, "w", encoding="utf-8") as handle:
-            handle.write(
-                report_mod.render_markdown(
-                    result, show_remote_only=args.show_remote_only
-                )
+        if args.local_only_dirs:
+            markdown = report_mod.render_local_only_dirs_markdown(
+                result, max_examples=args.max_examples
             )
+        else:
+            markdown = report_mod.render_markdown(
+                result, show_remote_only=args.show_remote_only
+            )
+        with open(args.md, "w", encoding="utf-8") as handle:
+            handle.write(markdown)
         print(f"Markdown report written to {args.md}", file=sys.stderr)
 
     return 0

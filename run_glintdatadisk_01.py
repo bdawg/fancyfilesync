@@ -58,6 +58,13 @@ MAX_EXAMPLES = 0
 # Colourise the report: "auto" (colour only on a terminal), "always", "never".
 COLOR = "auto"
 
+# Instead of the full report, print a short summary of the local files with NO
+# match on the other side, grouped by the directory holding them (rather than
+# listed file by file), flagging whether each directory is entirely unmatched
+# (copy it wholesale) or also holds files that are already on the other side.
+# Applies to the text and Markdown output; the JSON output is unaffected.
+LOCAL_ONLY_DIRS = False
+
 # List every remote file that has no local match. Usually noise on a big remote
 # tree, so off by default (the full list is still in the JSON output).
 SHOW_REMOTE_ONLY = False
@@ -105,6 +112,8 @@ def build_argv():
     argv += ["--color", COLOR]
     if SHOW_REMOTE_ONLY:
         argv += ["--show-remote-only"]
+    if LOCAL_ONLY_DIRS:
+        argv += ["--local-only-dirs"]
     if MATCH_RENAMED:
         argv += ["--match-renamed"]
     if ASSUME_NAME_SIZE:
